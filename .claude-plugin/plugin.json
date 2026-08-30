@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "staged-build",
+  "displayName": "Staged Build",
+  "description": "Staged, multi-model build pipeline: plan, specify, implement, review, validate, debug.",
+  "version": "0.2.0",
+  "author": {
+    "name": "NSRandom",
+    "email": "github@nsrandom.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "pipeline",
+    "subagents",
+    "code-review",
+    "planning",
+    "multi-model"
+  ]
+}

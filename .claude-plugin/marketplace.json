@@ -1,0 +1,16 @@
+{
+  "name": "staged-build",
+  "owner": {
+    "name": "NSRandom",
+    "email": "github@nsrandom.com"
+  },
+  "description": "Marketplace hosting the staged-build pipeline plugin.",
+  "plugins": [
+    {
+      "name": "staged-build",
+      "source": "./",
+      "description": "Staged, multi-model build pipeline: plan, specify, implement, review, validate, debug.",
+      "version": "0.2.0"
+    }
+  ]
+}
