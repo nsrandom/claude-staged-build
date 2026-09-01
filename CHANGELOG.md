@@ -5,6 +5,58 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-09-01
+
+### Added
+
+- **`/staged-build:yolo`** — a second command that runs every pending stage of a
+  plan back to back instead of one per invocation. Same per-stage pipeline
+  (stage-architect → plan-checker → implementer → reviewer → validator, same cycle
+  limits), with three additions:
+
+  - **An autonomy policy.** Every judgement call a subagent hands back is triaged
+    as *major* — stop and ask the user — or *minor* — decide, log, continue. Major
+    covers anything that changes scope or acceptance criteria, anything not cheaply
+    reversible (data model, schema, migration, on-disk or wire format, public API,
+    new dependency), anything touching auth, credentials, billing, or user data,
+    anything destructive or outward-facing, any convention the user has not set,
+    and every pipeline stop condition (implementer stopped, stage split, conflict,
+    `REPLANNED`, a check still failing after its 2 cycles). A call that is still
+    ambiguous after a moment's thought is major.
+  - **A decision log.** `specs/<feature>/DECISIONS.md`, written only by the
+    orchestrator from the structured **Autonomous decisions** section each subagent
+    now appends to its report. Every minor decision must land as one named place to
+    change — a constant, a default parameter, a config key — and the entry records
+    that `file:line`. Building an abstraction to hold a small decision is
+    explicitly ruled out.
+  - **A closing review stage.** When the last planned stage passes, `yolo` appends
+    a `Confirm autonomous decisions` row to STATE.md and walks the user through
+    every `unconfirmed` entry. Unpicked decisions become `confirmed`; requested
+    changes go to the plan-architect as appended stages and the run continues
+    through them.
+
+- `yolo` commits, where `next` only describes the commit: one commit per stage, and
+  one per `[large]` step within a stage. It records the stage's base commit before
+  the implementer runs and hands the reviewer `git diff <base>` rather than
+  `git diff`, so mid-stage commits do not hide half the diff from review.
+- `yolo` takes an optional goal — `/staged-build:yolo "<goal>"` — and runs the
+  normal planning conversation first when no plan exists. Plan approval stays an
+  explicit user gate.
+- `yolo` branch resolution adopts the current branch when it is already a clean new
+  branch (not the default branch, nothing dirty outside `specs/`, no commits of its
+  own) and creates `staged-build/<feature>` otherwise, recording either on the
+  `Branch:` line. It never creates a second branch, deletes one, merges, rebases,
+  or pushes.
+
+### Notes
+
+- The reviewer, validator, and plan-checker never receive the decision log or the
+  autonomy addendum. The validator still gets the stage file and nothing else — an
+  unattended run makes that independence the last honest check in the pipeline
+  rather than a formality to trim.
+- `/staged-build:stage` is unchanged. `next` still runs exactly one stage, asks
+  before deciding anything, and leaves the commit to you.
+
 ## [0.3.0] — 2026-09-01
 
 ### Added

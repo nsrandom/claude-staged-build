@@ -5,7 +5,9 @@ model in each role.
 
 A plan is broken into stages that can each ship on their own. Every stage is
 implemented, reviewed, and then **independently validated** before the next one
-starts. The pipeline runs exactly one stage per invocation and stops.
+starts. `/staged-build:stage next` runs exactly one stage per invocation and stops;
+`/staged-build:yolo` runs the whole plan end to end and stops only for decisions
+that are genuinely yours to make.
 
 ## Roles
 
@@ -66,7 +68,7 @@ Verify it loaded:
 claude plugin details staged-build
 ```
 
-You should see 7 agents and 1 command.
+You should see 7 agents and 2 commands.
 
 ### Developing on it
 
@@ -93,8 +95,9 @@ claude plugin uninstall staged-build && claude plugin install staged-build@stage
 
 ### Names after install
 
-Everything is namespaced by the plugin. The command is **`/staged-build:stage`**,
-not `/stage`. The agents are `staged-build:plan-architect`,
+Everything is namespaced by the plugin. The commands are
+**`/staged-build:stage`** and **`/staged-build:yolo`**, not `/stage` and `/yolo`.
+The agents are `staged-build:plan-architect`,
 `staged-build:stage-architect`, `staged-build:plan-checker`,
 `staged-build:implementer`, `staged-build:reviewer`, `staged-build:validator`,
 `staged-build:debugger` — the names you see in `@`-mention typeahead, and the names
@@ -180,6 +183,68 @@ It asks before destroying work, naming the exact ref it would reset to. It stays
 the feature branch — the branch holds every earlier stage, so `redo` resets the
 current stage's work off it rather than deleting it.
 
+### `/staged-build:yolo`
+
+Runs **every** pending stage, back to back, committing as it goes. Same pipeline
+per stage — stage-architect, plan-checker, implementer, reviewer, validator — with
+three differences.
+
+**It decides small things itself.** Every judgement call a subagent hands back is
+triaged as major or minor. Minor is naming, placement, a default value, message
+wording, which of two equivalent helpers to call — it decides, writes it down, and
+carries on. Major stops the run and asks you: anything that changes scope or
+acceptance criteria, anything not cheaply reversible (data model, schema,
+migration, on-disk or wire format, public API, new dependency), anything touching
+auth, credentials, billing, or user data, anything destructive or outward-facing,
+and any convention you haven't set. The pipeline's own stop conditions — the
+implementer stopping, a `REPLANNED`, a check that still fails after two cycles —
+are always major.
+
+If it's still weighing which one a call is, it treats it as major. A wrong minor
+decision costs an edit; a wrong major one costs every stage built on top of it.
+
+**Every minor decision stays changeable.** It has to land as one named place to
+change — a named constant, a default parameter, a single config key — and the log
+records that `file:line`. One named place, not an abstraction layer: over-building
+a small decision is itself a decision you didn't ask for.
+
+**You review the decisions at the end.** They accumulate in
+`specs/<feature>/DECISIONS.md`, and when the last stage passes, `yolo` adds one
+more stage to `STATE.md` — *Confirm autonomous decisions* — and walks you through
+them. Anything you don't pick is confirmed. Anything you want changed goes back to
+the plan-architect as appended stages, and the run continues through those.
+
+```
+/staged-build:yolo                 # run the existing plan to completion
+/staged-build:yolo "<goal>"        # plan it first, then run it
+```
+
+Given a goal with no plan, it runs the normal planning conversation first. That
+gate isn't skipped: approving the plan is the most major decision there is.
+
+#### Branches and commits under yolo
+
+**One branch, and it commits.** If `STATE.md` already names a branch it uses that.
+Otherwise it adopts the branch you're on when that branch is a *clean new branch* —
+not the default branch, nothing dirty outside `specs/`, no commits of its own — and
+creates `staged-build/<feature>` when it isn't. Either way it records the name and
+tells you which happened.
+
+Then one commit per stage, and one per `[large]` step within a stage. It never
+creates a second branch, never deletes one, and never merges, rebases, or pushes —
+pushing is outward-facing, so it's outside what `yolo` authorizes even when the
+branch has a remote. If the run stops on a major issue, the tree is left exactly as
+it is rather than tidied up.
+
+#### What the judges don't see
+
+The reviewer, validator, and plan-checker never receive the decision log or the
+autonomy policy. Telling a judge which departures were pre-approved is how it stops
+being one. The validator in particular still gets the stage file and nothing else —
+unattended running makes that the last independent check in the pipeline, not a
+formality to trim. If the reviewer flags a logged decision, that's a real finding
+and goes to the debugger like any other.
+
 ## State layout
 
 Plan state lives in `specs/`, in your project, one directory per feature:
@@ -192,10 +257,18 @@ specs/<feature>/
     01-slug.md               # acceptance contract: criteria, verification, out-of-scope
     01-slug.detail.md        # implementation plan: signatures, edge cases, test plan
     01-slug.report.md        # written when the stage passes validation
+  DECISIONS.md               # yolo only: decisions taken without asking
 ```
 
 `STATE.md` also carries the feature's `Branch:` line — the one branch every stage
 is built on.
+
+`DECISIONS.md` is written only by `/staged-build:yolo`, and only by the
+orchestrator — subagents report their decisions and it transcribes them, so the
+format stays uniform and the log is complete even if the run stops mid-stage. Each
+entry carries the call that was open, what was chosen and over what, why, the
+`file:line` that holds it, and a status of `unconfirmed`, `confirmed`, or
+`changed → stage NN`.
 
 `SPEC.md` and `STATE.md` are written by the plan-architect up front. Everything
 under `stages/` is written by the stage-architect when that stage begins — so a
@@ -366,6 +439,11 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
 - Plan checking costs two to four extra subagent runs per stage — one for the stage
   plan and one for each `[large]` step. That is deliberate: it is the cheapest point
   in the pipeline at which a wrong plan can be caught.
+- **`/staged-build:yolo` needs `Bash(git commit:*)` and `Bash(git add:*)`**, since
+  it commits each stage rather than describing the commit for you. Without them the
+  run stops on the first permission prompt, which defeats the point of running
+  unattended. It never needs push, merge, rebase, or branch deletion, so there is no
+  reason to allow those.
 
 ## License
 

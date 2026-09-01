@@ -116,7 +116,10 @@ keep starting one per stage. Do not create or move bookmarks unless the user ask
 
 # Subcommands
 
-Read `$ARGUMENTS` and dispatch. If it is empty, show `status`.
+Read `$ARGUMENTS` and dispatch. If it is empty, show `status`. If it names
+something that is not one of the four below, say so rather than improvising a
+subcommand — in particular, `yolo` is a separate command, `/staged-build:yolo`,
+which runs every stage in sequence instead of one.
 
 ## `plan "<goal>"`
 
