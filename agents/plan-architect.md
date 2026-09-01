@@ -98,6 +98,7 @@ they belong. The next person to read this should not have to re-litigate them.
 # Plan state — <feature>
 
 Goal: <one line>
+Branch: (not created yet)
 
 | # | Stage | Status |
 |---|-------|--------|
@@ -107,6 +108,11 @@ Goal: <one line>
 
 Status is one of `pending`, `in-progress`, `done`, `blocked`. All stages start
 `pending`. If STATE.md exists, preserve the status of rows you are not changing.
+
+`Branch:` is the one branch the whole feature is built on. Write it as
+`(not created yet)` — the orchestrator creates the branch when the first stage
+starts and records the name here. Every later stage reuses it, so if STATE.md
+already exists and names a branch, leave that line exactly as you found it.
 
 You do **not** write anything under `stages/`. Detailed stage specs are written by
 the stage-architect when each stage begins, so they can be informed by what the

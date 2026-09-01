@@ -13,16 +13,27 @@ starts. The pipeline runs exactly one stage per invocation and stops.
 |---|---|---|---|
 | `plan-architect` | opus | Read, Grep, Glob, Write, Bash | Designs the plan and proposes the stages. Asks rather than assumes. No code. |
 | `stage-architect` | opus | Read, Grep, Glob, Write, Bash | Turns one stage into a precise, implementable spec. Splits it if too large. No code. |
+| `plan-checker` | opus | Read, Grep, Glob, Bash | Checks a stage's plan against the real codebase before anything is built. No Write/Edit. |
 | `implementer` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Implements exactly one stage. |
-| `reviewer` | opus | Read, Grep, Glob, Bash | Reads the diff against the stage file. No Write/Edit. |
+| `reviewer` | sonnet | Read, Grep, Glob, Bash | Reads the diff against the stage file. No Write/Edit. |
 | `validator` | sonnet | Read, Bash, Grep, Glob | Runs the thing and observes it. Never fixes. |
-| `debugger` | opus | Read, Edit, Bash, Grep, Glob | Root cause, minimal fix, or replans a wrong stage. |
+| `debugger` | sonnet | Read, Edit, Bash, Grep, Glob | Root cause, minimal fix, or replans a wrong stage. |
 
 **Planning happens in two passes, at two altitudes.** The plan-architect works out
 *what* to build and *in what order*, and settles it with you before anything is
 written. The stage-architect then works out *how*, one stage at a time, so a
 stage's detailed spec is written after the stages before it have actually landed —
 informed by what the code really became rather than by what the plan predicted.
+
+**No plan is implemented until it has been checked against the codebase.** Once the
+stage-architect has written a stage's implementation plan, the `plan-checker` reads
+the repository and tries to falsify it: does every signature it quotes really exist,
+does every acceptance criterion map to a step, would the verification command
+actually fail today. A plan that fails goes back to the stage-architect for a
+revision pass. Steps the architect marks `[large]` get their own separate check, at
+the depth a whole stage gets, so the expensive part of a stage isn't the part
+nobody looked at twice. A plan defect caught here costs one revision; the same
+defect caught later costs an implementer, a reviewer, a validator, and a debugger.
 
 The **validator is given only the stage file** — never the implementer's report or
 the reviewer's verdict. It re-derives whether the stage works from observed
@@ -55,7 +66,7 @@ Verify it loaded:
 claude plugin details staged-build
 ```
 
-You should see 5 agents and 1 skill.
+You should see 7 agents and 1 command.
 
 ### Developing on it
 
@@ -84,9 +95,10 @@ claude plugin uninstall staged-build && claude plugin install staged-build@stage
 
 Everything is namespaced by the plugin. The command is **`/staged-build:stage`**,
 not `/stage`. The agents are `staged-build:plan-architect`,
-`staged-build:stage-architect`, `staged-build:implementer`,
-`staged-build:reviewer`, `staged-build:validator`, `staged-build:debugger` — the
-names you see in `@`-mention typeahead, and the names the orchestrator delegates to.
+`staged-build:stage-architect`, `staged-build:plan-checker`,
+`staged-build:implementer`, `staged-build:reviewer`, `staged-build:validator`,
+`staged-build:debugger` — the names you see in `@`-mention typeahead, and the names
+the orchestrator delegates to.
 
 ## Usage
 
@@ -117,21 +129,45 @@ directions.
 
 Takes **one** stage from pending to done:
 
-1. Starts a change (`jj new`, or a `git` branch — detected, not assumed)
+1. Gets on the feature's branch (`jj new`, or the one `git` branch for this feature
+   — see [Branches](#branches))
 2. Marks the stage `in-progress`
 3. **stage-architect** writes the stage's acceptance contract and implementation plan
-4. **implementer** implements it
-5. **reviewer** reviews the diff → `VERDICT: PASS` / `FAIL`
-6. On FAIL → **debugger**, then re-review (max 2 cycles)
-7. **validator** independently verifies, given only the stage file
-8. On FAIL → **debugger**, then re-validate (max 2 cycles)
-9. On PASS → writes a stage report, marks it `done`, describes the commit, **stops**
+4. **plan-checker** checks that plan against the codebase → `VERDICT: PASS` / `FAIL`
+5. **plan-checker** checks each `[large]` step of the plan separately, one
+   invocation per step
+6. On FAIL → **stage-architect** revises the plan, then re-check (max 2 cycles).
+   Nothing is implemented until the plan passes.
+7. **implementer** implements it
+8. **reviewer** reviews the diff → `VERDICT: PASS` / `FAIL`
+9. On FAIL → **debugger**, then re-review (max 2 cycles)
+10. **validator** independently verifies, given only the stage file
+11. On FAIL → **debugger**, then re-validate (max 2 cycles)
+12. On PASS → writes a stage report, marks it `done`, describes the commit, **stops**
 
 It never auto-continues. Run `next` again for the following stage.
 
 If the debugger concludes the *stage spec* was wrong rather than the code, it
 updates the stage file, marks the stage `blocked`, and reports `REPLANNED` — the
 pipeline stops immediately so you can look at the plan.
+
+#### Branches
+
+**One branch for the whole feature.** The first `next` creates
+`staged-build/<feature>` and records it on the `Branch:` line of
+`specs/<feature>/STATE.md`; every stage after that checks out the same branch and
+commits onto it. There is no branch per stage.
+
+The orchestrator will only create a second branch if you explicitly ask —
+`/staged-build:stage next --new-branch`, or just saying so. It then records the new
+branch in STATE.md and every following stage uses that one. It never deletes a
+branch, including in `redo`, and it never merges, rebases, or pushes.
+
+If the recorded branch has gone missing, `next` stops and asks rather than quietly
+branching from wherever HEAD happens to be.
+
+In a **jj** repo this doesn't apply: `jj new` starts a change, not a branch, so each
+stage still starts its own change and bookmarks are left alone.
 
 ### `/staged-build:stage status`
 
@@ -140,7 +176,9 @@ The stage table plus the most recent stage report. Changes nothing.
 ### `/staged-build:stage redo`
 
 Resets the current stage to `pending`, abandons its change, and runs `next` again.
-It asks before destroying work.
+It asks before destroying work, naming the exact ref it would reset to. It stays on
+the feature branch — the branch holds every earlier stage, so `redo` resets the
+current stage's work off it rather than deleting it.
 
 ## State layout
 
@@ -155,6 +193,9 @@ specs/<feature>/
     01-slug.detail.md        # implementation plan: signatures, edge cases, test plan
     01-slug.report.md        # written when the stage passes validation
 ```
+
+`STATE.md` also carries the feature's `Branch:` line — the one branch every stage
+is built on.
 
 `SPEC.md` and `STATE.md` are written by the plan-architect up front. Everything
 under `stages/` is written by the stage-architect when that stage begins — so a
@@ -184,10 +225,11 @@ Defaults live in `pipeline.json` at the plugin root:
 {
   "plan-architect": "opus",
   "stage-architect": "opus",
+  "plan-checker": "opus",
   "implementer": "sonnet",
-  "reviewer": "opus",
+  "reviewer": "sonnet",
   "validator": "sonnet",
-  "debugger": "opus"
+  "debugger": "sonnet"
 }
 ```
 
@@ -198,6 +240,7 @@ project. It replaces the plugin default. No agent files need editing:
 {
   "plan-architect": "opus",
   "stage-architect": "opus",
+  "plan-checker": "opus",
   "implementer": "haiku",
   "reviewer": "opus",
   "validator": "sonnet",
@@ -311,11 +354,18 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
   Use whatever your stage's **Verification** command actually invokes. The
   debugger will not work around a denial — it will not disable the sandbox, and
   it will not "fix" a failure it was never able to reproduce.
+- **The plan-checker needs no execution permission.** It has no Write and no Edit,
+  and its Bash use is reading only — `cat`, `rg`, `git log`. It never runs your
+  build or your tests; that is the validator's job, after the code exists.
 - Plugin agents ignore `hooks`, `mcpServers`, and `permissionMode` frontmatter —
   this plugin does not use those fields.
-- Stages are sized for roughly 400 lines of diff. A stage much larger than that
-  is a planning bug; the stage-architect splits it when `next` reaches it, and the
-  pipeline stops so you can see the new breakdown before any code is written.
+- Stages are sized for roughly 400 lines of diff, and steps within a stage are
+  marked `[large]` at roughly 150. A stage much larger than that is a planning bug;
+  the stage-architect splits it when `next` reaches it, and the pipeline stops so
+  you can see the new breakdown before any code is written.
+- Plan checking costs two to four extra subagent runs per stage — one for the stage
+  plan and one for each `[large]` step. That is deliberate: it is the cheapest point
+  in the pipeline at which a wrong plan can be caught.
 
 ## License
 

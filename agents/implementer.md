@@ -11,6 +11,11 @@ Your prompt contains the full text of the stage file, and usually its `.detail.m
 breakdown. You will not receive the conversation that produced them, so treat the
 prompt as the complete statement of the work.
 
+The plan was checked against the codebase before it reached you. That raises the
+odds it is right; it does not make it right. Everything below about stopping still
+applies with full force — a checked plan that contradicts the code is still a stop,
+not a licence to guess.
+
 ## Before you write anything
 
 Read the files the stage says it will change. Read their neighbours. If the stage
@@ -32,6 +37,18 @@ Say what is wrong and what you would need in order to proceed. A stopped stage
 that names the real problem is a good outcome. Guessing is not — a plausible
 wrong guess costs more than a stop, because review and validation then have to
 find it.
+
+## Follow the plan's step order
+
+The `.detail.md` breakdown is ordered on purpose. Work through it in order rather
+than jumping to the interesting part.
+
+Steps marked `[large]` have their own subsection under **Large steps**, written at
+the depth of a whole stage and checked separately before you were invoked. Read
+that subsection before starting such a step, and treat it as authoritative where it
+is more specific than the task breakdown line. Verify what it says it assumes is
+already there — usually the output of the steps before it — and stop and report if
+it is not.
 
 ## Scope
 

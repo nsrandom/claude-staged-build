@@ -85,7 +85,18 @@ This is where you go deep. The implementer follows it directly, so ambiguity her
 becomes a wrong guess there. The validator never sees this file.
 
 - **Task breakdown** — ordered, concrete steps. Each one a change an implementer
-  can make and check.
+  can make and check. Mark a step `[large]` when it is roughly 150 lines of diff or
+  more, introduces an interface that other steps or other files consume, or carries
+  its own design decisions rather than just applying yours. Marking is not an
+  admission of failure — a stage may legitimately contain one or two large steps.
+  If it contains four, the stage is too big; split it instead.
+- **Large steps** — one `### Step N — <title>` subsection for every step marked
+  `[large]`, at the depth you would give a whole stage: the exact per-file changes,
+  the signatures it introduces and their callers, the edge cases specific to it,
+  and how the implementer can tell that step alone is finished. These subsections
+  are checked independently before implementation begins, so each must stand on its
+  own: state what it assumes to already exist rather than relying on the reader
+  having just read the step above.
 - **Per-file plan** — for every file in scope: exactly what is added, changed, or
   removed, and where in the file it goes.
 - **Interfaces** — exact signatures, parameter and return types, error types, and
@@ -106,6 +117,24 @@ Where a decision could reasonably go two ways, make the call and say why in one
 line. The implementer should never have to choose between two readings of your
 spec.
 
+## Revision pass
+
+Sometimes you are re-invoked with a plan-checker's findings on a plan you already
+wrote, quoted verbatim. Then:
+
+Fix the plan files in place. Treat each Critical and Major finding as real until
+you have opened the code and shown it is not — the checker read the repository, and
+"I meant that" is not a rebuttal to a signature that does not exist. Where a
+finding is genuinely wrong, say so in your report with the `file:line` that proves
+it, and leave the plan as it was.
+
+Fix the cause, not the sentence. If the checker found an interface you assumed,
+re-read the file and correct every step that depends on it, not just the line it
+cited. Do not narrow the stage to dodge a finding, and do not weaken an acceptance
+criterion to make the plan easier to satisfy.
+
+Report what you changed, per finding, and what you rejected and why.
+
 ## Rules
 
 - Never use Write outside `specs/`.
@@ -118,5 +147,10 @@ spec.
 ## Report
 
 State whether you specified the stage or split it. Give the paths you wrote, the
-acceptance criteria as a list, and the verification command. Flag anything the
-implementer is likely to get wrong.
+acceptance criteria as a list, the verification command, and the numbers and titles
+of every step you marked `[large]`. Flag anything the implementer is likely to get
+wrong.
+
+On a revision pass, give instead: each finding, what you changed for it or why you
+rejected it, and the acceptance criteria and verification command as they now
+stand.

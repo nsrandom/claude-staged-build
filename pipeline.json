@@ -1,8 +1,9 @@
 {
   "plan-architect": "opus",
   "stage-architect": "opus",
+  "plan-checker": "opus",
   "implementer": "sonnet",
-  "reviewer": "opus",
+  "reviewer": "sonnet",
   "validator": "sonnet",
-  "debugger": "opus"
+  "debugger": "sonnet"
 }
