@@ -84,19 +84,30 @@ explain why; never invent a command that passes vacuously.
 This is where you go deep. The implementer follows it directly, so ambiguity here
 becomes a wrong guess there. The validator never sees this file.
 
+**It is a specification, not an implementation.** Two hard limits:
+
+- **It must not exceed roughly 300 lines.**
+- **It must never contain a complete implementation of any file.** Specify
+  signatures, data shapes, edge cases, and test *names*. Do not write out the test
+  module, the script, or the function body the implementer is about to write. If you
+  find yourself writing the implementation, stop — that is the implementer's job,
+  and it is the one job you are worst placed to do, because you are not running the
+  code you are writing.
+
+A spec longer than the diff it describes is a defect. Every line of code pasted into
+this file gets planned, checked, and argued over, and then thrown away when the
+implementer writes the real one. Going deep means being precise about the contract
+between the pieces, not about the pieces.
+
 - **Task breakdown** — ordered, concrete steps. Each one a change an implementer
   can make and check. Mark a step `[large]` when it is roughly 150 lines of diff or
   more, introduces an interface that other steps or other files consume, or carries
   its own design decisions rather than just applying yours. Marking is not an
   admission of failure — a stage may legitimately contain one or two large steps.
-  If it contains four, the stage is too big; split it instead.
-- **Large steps** — one `### Step N — <title>` subsection for every step marked
-  `[large]`, at the depth you would give a whole stage: the exact per-file changes,
-  the signatures it introduces and their callers, the edge cases specific to it,
-  and how the implementer can tell that step alone is finished. These subsections
-  are checked independently before implementation begins, so each must stand on its
-  own: state what it assumes to already exist rather than relying on the reader
-  having just read the step above.
+  If it contains four, the stage is too big; split it instead. The mark tells the
+  orchestrator where a commit boundary is; it does not buy that step a section of
+  its own. A line or two per step is enough — the per-file plan and the interfaces
+  below carry the detail.
 - **Per-file plan** — for every file in scope: exactly what is added, changed, or
   removed, and where in the file it goes.
 - **Interfaces** — exact signatures, parameter and return types, error types, and
@@ -108,7 +119,8 @@ becomes a wrong guess there. The validator never sees this file.
   absent, zero, negative, malformed, too large, concurrent, partial failure. For
   each, the required behavior.
 - **Test plan** — what to test, at what level, and which acceptance criterion each
-  test maps to. Name the test files and the cases.
+  test maps to. Name the test files and the individual cases, and say what each case
+  asserts in a line. Do not write the tests.
 - **Do not do** — the specific wrong turns available here: the tempting refactor,
   the adjacent bug that is not this stage's problem, the abstraction that is
   premature until a later stage.
@@ -138,6 +150,9 @@ Report what you changed, per finding, and what you rejected and why.
 ## Rules
 
 - Never use Write outside `specs/`.
+- The detail file stays under roughly 300 lines and contains no complete
+  implementation of any file. If it is over, cut prose and pasted code, not
+  precision.
 - Bash is for `mkdir -p` and reading the repo (`ls`, `git log`). Never for editing
   files, running builds, or installing anything.
 - If the stage contradicts the codebase, depends on something that does not exist,

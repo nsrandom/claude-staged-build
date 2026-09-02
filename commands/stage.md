@@ -190,58 +190,48 @@ Take **one** stage from pending to done. One. Never begin a second.
    that the stage conflicts with the codebase, stop and surface that too.
 
 5. **Verify the plan.** Nothing gets implemented until the plan has been checked
-   against the real codebase. Delegate to `staged-build:plan-checker` in **stage
-   plan** mode, with the full text of `NN-slug.md` and `NN-slug.detail.md`. Say
-   explicitly which mode it is running in. Read its final line for
+   against the real codebase. Delegate to `staged-build:plan-checker` **once**, with
+   the full text of `NN-slug.md` and `NN-slug.detail.md`. Read its final line for
    `VERDICT: PASS` or `VERDICT: FAIL`.
+
+   One check per stage. There is no per-step check — do not invoke the plan-checker
+   again for `[large]` steps or for any part of the plan on its own.
 
    This step is not optional and not conditional on how good the plan looks to you.
    You do not read the code to judge a plan — that is exactly the substitution the
    pipeline forbids.
 
-6. **Verify each large step.** For every step the detail file marks `[large]`, run
-   a further `staged-build:plan-checker` in **step plan** mode: the full text of
-   both files, plus the step number, its task-breakdown line, and its **Large
-   steps** subsection quoted verbatim, and a statement that this step is the
-   subject of the check.
+6. **On a plan-check FAIL** → delegate to `staged-build:stage-architect` for a
+   **revision pass**, passing the checker's findings quoted verbatim alongside the
+   current text of both plan files. Then re-run the check against the revised plan.
+   **At most 1 revise→check cycle.** If the second check also fails, stop and report
+   every finding from both attempts. Do not implement a plan that failed its check.
 
-   **One invocation per large step.** Do not batch them into a single prompt — a
-   large step gets the depth of attention a whole stage gets, and batching is how
-   that turns into a skim. If the stage has no `[large]` steps, skip this step and
-   say so.
-
-7. **On any plan-check FAIL** → delegate to `staged-build:stage-architect` for a
-   **revision pass**, passing the failing checker's findings quoted verbatim
-   alongside the current text of both plan files. Then re-run every check that
-   failed, in the same mode, against the revised plan. **At most 2 revise→check
-   cycles.** If a check still fails, stop and report every finding across all
-   attempts. Do not implement a plan that failed its check.
-
-   If a plan-checker returns **Questions**, ask the user — you are the subagents'
+   If the plan-checker returns **Questions**, ask the user — you are the subagents'
    only channel — and pass the answers verbatim to the stage-architect on the
    revision pass. Questions alone do not fail a plan; do not treat them as a
    blocker unless the answer would change the plan.
 
-8. **Show the checked plan.** Before implementation, show the user: the acceptance
-   criteria, the verification command, the titles of any `[large]` steps, and every
+7. **Show the checked plan.** Before implementation, show the user: the acceptance
+   criteria, the verification command, the titles of any `[large]` steps, and the
    plan-check verdict. Then continue — this is a report, not an approval gate,
    unless the user asked to approve the plan.
 
-9. **Implement.** Delegate to `staged-build:implementer` with the full text of both
+8. **Implement.** Delegate to `staged-build:implementer` with the full text of both
    `NN-slug.md` and `NN-slug.detail.md`. If it stops rather than implementing, stop
    the pipeline and report what it said. Do not implement it yourself and do not
    re-prompt it to try harder.
 
-10. **Review.** Delegate to `staged-build:reviewer` with the full text of
-    `NN-slug.md` and the complete diff (`jj diff` or `git diff`, plus untracked
-    files). Read its final line for `VERDICT: PASS` or `VERDICT: FAIL`.
+9. **Review.** Delegate to `staged-build:reviewer` with the full text of
+   `NN-slug.md` and the complete diff (`jj diff` or `git diff`, plus untracked
+   files). Read its final line for `VERDICT: PASS` or `VERDICT: FAIL`.
 
-11. **On review FAIL** → delegate to `staged-build:debugger` with `NN-slug.md` and
+10. **On review FAIL** → delegate to `staged-build:debugger` with `NN-slug.md` and
     the reviewer's findings quoted verbatim, then send the new diff back to
     `staged-build:reviewer`. **At most 2 debug→review cycles.** If it still fails,
     stop and report every finding across all attempts.
 
-12. **Validate.** Delegate to `staged-build:validator` with the full text of
+11. **Validate.** Delegate to `staged-build:validator` with the full text of
     `NN-slug.md` **and nothing else.**
 
     Do not pass `NN-slug.detail.md`. Do not pass the implementer's report. Do not
@@ -252,16 +242,16 @@ Take **one** stage from pending to done. One. Never begin a second.
     is the entire reason the role exists — preserve it even though repeating
     context would be more efficient.
 
-13. **On validation FAIL** → delegate to `staged-build:debugger` with `NN-slug.md`
+12. **On validation FAIL** → delegate to `staged-build:debugger` with `NN-slug.md`
     and the validator's findings verbatim, then re-run `staged-build:validator` with
-    the contract alone, exactly as in step 12. **At most 2 debug→validate cycles.**
+    the contract alone, exactly as in step 11. **At most 2 debug→validate cycles.**
     If it still fails, stop and report.
 
-14. **If the debugger returns `REPLANNED`** at any point → stop immediately. Show
+13. **If the debugger returns `REPLANNED`** at any point → stop immediately. Show
     what changed in the stage file and why. The stage is `blocked` in STATE.md.
     Do not continue, do not re-run, do not start the next stage.
 
-15. **On validation PASS:**
+14. **On validation PASS:**
     - Write `specs/<feature>/stages/NN-slug.report.md` containing: what was built,
       files changed, each acceptance criterion with the validator's evidence, the
       plan-check findings that were fixed before implementation, the review findings

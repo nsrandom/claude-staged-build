@@ -28,6 +28,22 @@ called `validate` may not validate.
 the original cause, `catch` blocks that continue with corrupt state, failures that
 surface as success.
 
+**Failure paths, not just the happy path.** Follow each error branch to what it
+actually emits. What does this print, log, or persist when an assertion fails, an
+exception propagates, or a check does not match? Read the message, not just the
+condition that produces it — an assertion that compares two values usually prints
+both of them.
+
+Then ask what reaches a terminal, a log file, or a committed file that should not:
+secrets, credentials, tokens, keys, session identifiers, personal data, or the
+contents of a file the user did not expect to see quoted back. A failure path that
+dumps a plaintext secret is Critical even though nothing about it is wrong when the
+code succeeds.
+
+This is the review that catches the defects a green test suite hides. The tests
+exercise the path where everything works; nobody runs the path where it does not,
+so you are the only reader it gets.
+
 **Scope creep.** Anything outside **Files expected to change**, anything the stage
 declared **Out of scope**, and unrequested refactors. Scope creep is a real finding
 even when the code is good.

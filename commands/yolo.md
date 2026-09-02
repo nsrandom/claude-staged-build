@@ -125,7 +125,7 @@ Stop the run, explain where it stopped, and ask. Do not proceed on an assumption
   - the implementer stopped rather than implementing,
   - the stage-architect split the stage or reported a conflict with the codebase,
   - the debugger returned `REPLANNED`,
-  - a plan check still fails after 2 revise→check cycles,
+  - a plan check still fails after its one revise→check cycle,
   - a review still fails after 2 debug→review cycles,
   - a validation still fails after 2 debug→validate cycles,
   - a stage is marked `blocked`.
@@ -399,31 +399,26 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
 
    A split or a reported conflict is major → stop.
 
-4. **Check the plan.** Delegate to `staged-build:plan-checker` in **stage plan**
-   mode with the full text of both files, saying which mode it is in. Read its
-   final line for `VERDICT: PASS` / `VERDICT: FAIL`. No addendum — the checker is
-   a judge.
+4. **Check the plan.** Delegate to `staged-build:plan-checker` **once**, with the
+   full text of both files. Read its final line for `VERDICT: PASS` /
+   `VERDICT: FAIL`. No addendum — the checker is a judge.
+
+   One check per stage. There is no per-step check — do not invoke the plan-checker
+   again for `[large]` steps or for any part of the plan on its own.
 
    This is not optional and not conditional on how good the plan looks to you. You
    do not read the code to judge a plan.
 
-5. **Check each `[large]` step.** One `staged-build:plan-checker` invocation per
-   step, in **step plan** mode: both files in full, plus that step's number, its
-   task-breakdown line, and its **Large steps** subsection quoted verbatim. Never
-   batch them — batching is how a deep check becomes a skim. If there are no
-   `[large]` steps, say so and skip.
-
-6. **On any plan-check FAIL** → `staged-build:stage-architect` revision pass, with
-   the failing checker's findings quoted verbatim and the current text of both
-   files, plus the addendum. Re-run every check that failed. **At most 2
-   revise→check cycles**; still failing is major → stop with every finding from
-   every attempt.
+5. **On a plan-check FAIL** → `staged-build:stage-architect` revision pass, with the
+   checker's findings quoted verbatim and the current text of both files, plus the
+   addendum. Re-run the check against the revised plan. **At most 1 revise→check
+   cycle**; a second failure is major → stop with every finding from both attempts.
 
    A plan-checker's **Questions** are triaged, not escalated by default: answer the
    minor ones yourself, log them, and pass your answers verbatim into the revision
    pass. A question whose answer would change the plan's shape is major.
 
-7. **Implement.** Record the stage base (`git rev-parse HEAD`). Delegate to
+6. **Implement.** Record the stage base (`git rev-parse HEAD`). Delegate to
    `staged-build:implementer` with the full text of `NN-slug.md` and
    `NN-slug.detail.md`, the addendum, and — if the stage has `[large]` steps — the
    per-step commit instruction. If it stops rather than implementing, that is
@@ -432,7 +427,7 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
 
    Transcribe its **Autonomous decisions** section into `DECISIONS.md` now.
 
-8. **Review.** Delegate to `staged-build:reviewer` with the full text of
+7. **Review.** Delegate to `staged-build:reviewer` with the full text of
    `NN-slug.md` and the complete stage diff — `git diff <stage base>` plus
    untracked files, or `jj diff`. No addendum, no decision log.
 
@@ -440,7 +435,7 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
    the addendum; then re-review with the new diff. **At most 2 debug→review
    cycles**; still failing is major → stop.
 
-9. **Validate.** Delegate to `staged-build:validator` with the full text of
+8. **Validate.** Delegate to `staged-build:validator` with the full text of
    `NN-slug.md` **and nothing else.**
 
    Not the detail file. Not the implementer's report. Not the reviewer's verdict,
@@ -455,11 +450,11 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
    the addendum; then re-validate with the contract alone, exactly as above. **At
    most 2 debug→validate cycles**; still failing is major → stop.
 
-10. **If the debugger returns `REPLANNED`** at any point → major. Mark the stage
-    `blocked`, show what changed in the stage file and why, and stop immediately.
-    Do not continue, do not re-run, do not start the next stage.
+9. **If the debugger returns `REPLANNED`** at any point → major. Mark the stage
+   `blocked`, show what changed in the stage file and why, and stop immediately.
+   Do not continue, do not re-run, do not start the next stage.
 
-11. **On validation PASS:**
+10. **On validation PASS:**
     - Transcribe any remaining **Autonomous decisions** (debugger, stage-architect)
       into `DECISIONS.md`.
     - Write `specs/<feature>/stages/NN-slug.report.md`: what was built, files

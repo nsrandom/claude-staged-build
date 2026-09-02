@@ -29,13 +29,19 @@ informed by what the code really became rather than by what the plan predicted.
 
 **No plan is implemented until it has been checked against the codebase.** Once the
 stage-architect has written a stage's implementation plan, the `plan-checker` reads
-the repository and tries to falsify it: does every signature it quotes really exist,
-does every acceptance criterion map to a step, would the verification command
-actually fail today. A plan that fails goes back to the stage-architect for a
-revision pass. Steps the architect marks `[large]` get their own separate check, at
-the depth a whole stage gets, so the expensive part of a stage isn't the part
-nobody looked at twice. A plan defect caught here costs one revision; the same
-defect caught later costs an implementer, a reviewer, a validator, and a debugger.
+the repository — and runs things against it — looking for the defects that a
+passing test suite would never surface: behaviour the contract asks for that the
+plan can't deliver, a secret that reaches a log or an assertion message, a
+documented idiom that silently does nothing, an irreversible action nobody
+authorized. It deliberately does *not* verify every citation or build a coverage
+map; a wrong regex or a bad path is cheaper to find by running the code. One check
+per stage, and a plan that fails goes back to the stage-architect for a single
+revision pass.
+
+The plan itself is capped: a stage's `detail.md` stays under ~300 lines and never
+contains a complete implementation of any file. A spec longer than the diff it
+describes is a defect — it gets planned, checked, and argued over, and then thrown
+away when the implementer writes the real thing.
 
 The **validator is given only the stage file** — never the implementer's report or
 the reviewer's verdict. It re-derives whether the stage works from observed
@@ -137,16 +143,15 @@ Takes **one** stage from pending to done:
 2. Marks the stage `in-progress`
 3. **stage-architect** writes the stage's acceptance contract and implementation plan
 4. **plan-checker** checks that plan against the codebase → `VERDICT: PASS` / `FAIL`
-5. **plan-checker** checks each `[large]` step of the plan separately, one
-   invocation per step
-6. On FAIL → **stage-architect** revises the plan, then re-check (max 2 cycles).
+   (once per stage — there is no per-step check)
+5. On FAIL → **stage-architect** revises the plan, then re-check (max 1 cycle).
    Nothing is implemented until the plan passes.
-7. **implementer** implements it
-8. **reviewer** reviews the diff → `VERDICT: PASS` / `FAIL`
-9. On FAIL → **debugger**, then re-review (max 2 cycles)
-10. **validator** independently verifies, given only the stage file
-11. On FAIL → **debugger**, then re-validate (max 2 cycles)
-12. On PASS → writes a stage report, marks it `done`, describes the commit, **stops**
+6. **implementer** implements it
+7. **reviewer** reviews the diff, happy path and failure paths → `VERDICT: PASS` / `FAIL`
+8. On FAIL → **debugger**, then re-review (max 2 cycles)
+9. **validator** independently verifies, given only the stage file
+10. On FAIL → **debugger**, then re-validate (max 2 cycles)
+11. On PASS → writes a stage report, marks it `done`, describes the commit, **stops**
 
 It never auto-continues. Run `next` again for the following stage.
 
@@ -197,7 +202,7 @@ acceptance criteria, anything not cheaply reversible (data model, schema,
 migration, on-disk or wire format, public API, new dependency), anything touching
 auth, credentials, billing, or user data, anything destructive or outward-facing,
 and any convention you haven't set. The pipeline's own stop conditions — the
-implementer stopping, a `REPLANNED`, a check that still fails after two cycles —
+implementer stopping, a `REPLANNED`, a check that still fails after its cycles —
 are always major.
 
 If it's still weighing which one a call is, it treats it as major. A wrong minor
@@ -427,18 +432,22 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
   Use whatever your stage's **Verification** command actually invokes. The
   debugger will not work around a denial — it will not disable the sandbox, and
   it will not "fix" a failure it was never able to reproduce.
-- **The plan-checker needs no execution permission.** It has no Write and no Edit,
-  and its Bash use is reading only — `cat`, `rg`, `git log`. It never runs your
-  build or your tests; that is the validator's job, after the code exists.
+- **The plan-checker never modifies your tree.** It has no Write and no Edit. It
+  may run things — a snippet from the plan, a glob, a scratch reproduction in
+  `/tmp` — because a finding it demonstrated beats one it reasoned about, but it
+  makes no change inside the repository and runs no build that leaves artifacts
+  there.
 - Plugin agents ignore `hooks`, `mcpServers`, and `permissionMode` frontmatter —
   this plugin does not use those fields.
 - Stages are sized for roughly 400 lines of diff, and steps within a stage are
   marked `[large]` at roughly 150. A stage much larger than that is a planning bug;
   the stage-architect splits it when `next` reaches it, and the pipeline stops so
-  you can see the new breakdown before any code is written.
-- Plan checking costs two to four extra subagent runs per stage — one for the stage
-  plan and one for each `[large]` step. That is deliberate: it is the cheapest point
-  in the pipeline at which a wrong plan can be caught.
+  you can see the new breakdown before any code is written. The `[large]` mark now
+  only tells `yolo` where to put a per-step commit; it no longer buys the step a
+  check of its own.
+- Plan checking costs one extra subagent run per stage, and at most one more if the
+  plan fails and is revised. It is scoped to what a test run can't tell you; a plan
+  that fails twice stops the pipeline rather than going round again.
 - **`/staged-build:yolo` needs `Bash(git commit:*)` and `Bash(git add:*)`**, since
   it commits each stage rather than describing the commit for you. Without them the
   run stops on the first permission prompt, which defeats the point of running

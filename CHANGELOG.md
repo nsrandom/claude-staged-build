@@ -5,6 +5,89 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-09-02
+
+Rebalances the pipeline away from planning and towards building.
+
+A measured `/staged-build:yolo` run on a three-stage feature completed **one** stage
+and spent ~2.5M subagent tokens and ~150 minutes of wall time doing it:
+
+| Role | Calls | Tokens | Share | Wall |
+|---|---|---|---|---|
+| `plan-checker` | 13 | 1,249,461 | 49.4% | 94.5 min |
+| `stage-architect` | 7 | 1,122,611 | 44.3% | 43.8 min |
+| `implementer` | 1 | 78,529 | 3.1% | 4.3 min |
+| `reviewer` | 1 | 46,867 | 1.9% | 2.6 min |
+| `validator` | 1 | 34,313 | 1.4% | 1.5 min |
+| `debugger` | 0 | 0 | 0% | — |
+
+93.7% of the tokens went to planning and to checking plans; 3.1% went to writing
+code. Two causes. The detail file had become a second, unexecuted implementation —
+for one stage, 1,723 lines containing the verbatim text of a 170-line script and a
+~280-line test module — and three plan-checkers then reasoned about what that
+unexecuted code would do, at ~330k tokens a round. And sorting the run's findings by
+"would a post-implementation gate have caught this?" split them in half: a regex
+matching 212 files instead of 3, a wrong pipeline count, a step-ordering bug and a
+wrong interpreter path were all free from any test run, while a documented config
+idiom that silently didn't work, a reversible password digest, five assertions that
+printed plaintext secrets on failure, and an irreversible action needing a user
+decision were not. Only the second group justifies checking a plan before it is
+built — and three of those four were really *code* review, performed on code that
+happened to be sitting in a spec file.
+
+### Changed
+
+- **The stage-architect's detail file is capped.** It must not exceed roughly 300
+  lines and must never contain a complete implementation of any file: signatures,
+  data shapes, edge cases, and test *names*, not the test module or the script
+  written out. A spec longer than the diff it describes is now stated to be a
+  defect. Steps are still marked `[large]` — `yolo` uses the mark for per-step
+  commits — but a `[large]` step no longer gets a stand-alone subsection deep enough
+  to be checked on its own, because nothing checks steps any more.
+- **The plan-checker has one mode and a much narrower brief.** Step-plan mode is
+  gone. It no longer verifies every citation or builds a criteria coverage map, and
+  it is told to assume the implementer is competent and the test suite is real.
+  It reports three things: behaviour the contract specifies that the plan gets wrong
+  or cannot deliver; properties a passing test suite would not detect — secrets and
+  personal data on any path, weak or reversible handling, silent-failure modes,
+  irreversibility; and decisions the user must take before an irreversible action,
+  which go in **Questions**. The PASS/FAIL contract is unchanged.
+- **The plan-checker may now execute anything that does not modify the repository
+  tree** — run a snippet from the plan, measure what a glob really matches,
+  reproduce a failure in `/tmp` — where it was previously restricted to reading.
+  In the measured run its best findings all came from doing exactly this, against
+  its own stated rules. It still has no Write and no Edit and must leave the tree
+  as it found it.
+- **One plan check per stage, and one revision.** The per-`[large]`-step
+  invocations are removed from both `stage` and `yolo` (3 checks per stage → 1), and
+  the revise→check limit drops from 2 cycles to 1: a second failure stops and
+  reports every finding from both attempts.
+- **The reviewer takes on the failure-path work** the plan-checker used to attempt
+  from a distance. It now traces each error branch to what it actually emits — what
+  gets printed, logged, or persisted when an assertion fails or an error propagates
+  — and asks whether anything reaches a terminal, a log, or a committed file that
+  should not: secrets, credentials, tokens, personal data. This is the review that
+  catches the defects a green test suite hides.
+- **The implementer is told the spec is a spec.** It no longer looks for a **Large
+  steps** subsection that the stage-architect has stopped writing; `[large]` now
+  reads to it as a size and commit-boundary signal. It is told explicitly that the
+  detail file gives signatures, data shapes, edge cases and test names rather than
+  function bodies, that this is deliberate and not an omission to stop over, and
+  that it decides the local calls a spec should not be making for it. Its account of
+  the plan check is corrected too: the check is narrow and does not confirm every
+  signature and path the plan quotes, so confirming those is the implementer's job.
+  Nothing about its scope rules, its stop conditions, or its report changed.
+- README updated to match: the `next` step list, the plan-checker's permissions and
+  cost, and the note about what the `[large]` mark now buys.
+
+### Unchanged
+
+- `validator` and `debugger` — along with the implementer, the best value per token
+  in the measured run. Untouched. The implementer's own edit is confined to what the
+  spec now contains; its behaviour is unchanged.
+- The pipeline shape, the `STATE.md` / `DECISIONS.md` layout, the `yolo` autonomy
+  policy, and the branch and commit policy. No new agents.
+
 ## [0.4.0] — 2026-09-01
 
 ### Added

@@ -11,10 +11,13 @@ Your prompt contains the full text of the stage file, and usually its `.detail.m
 breakdown. You will not receive the conversation that produced them, so treat the
 prompt as the complete statement of the work.
 
-The plan was checked against the codebase before it reached you. That raises the
-odds it is right; it does not make it right. Everything below about stopping still
-applies with full force — a checked plan that contradicts the code is still a stop,
-not a licence to guess.
+The plan was checked before it reached you, but narrowly: the check looks for
+behaviour the contract cannot deliver and for the defects a passing test suite would
+never surface — leaked secrets, silent failures, irreversible actions. It
+deliberately does **not** confirm every signature, path, and command the plan
+quotes, because those are cheaper to find by running the code. That is your job
+now. Everything below about stopping applies with full force; a checked plan that
+contradicts the code is still a stop, not a licence to guess.
 
 ## Before you write anything
 
@@ -41,14 +44,24 @@ find it.
 ## Follow the plan's step order
 
 The `.detail.md` breakdown is ordered on purpose. Work through it in order rather
-than jumping to the interesting part.
+than jumping to the interesting part. Steps marked `[large]` are the substantial
+ones — roughly 150 lines of diff or more, or introducing an interface other steps
+consume. The mark is a signal about size and about where a commit boundary falls,
+not a pointer to a section elsewhere in the file.
 
-Steps marked `[large]` have their own subsection under **Large steps**, written at
-the depth of a whole stage and checked separately before you were invoked. Read
-that subsection before starting such a step, and treat it as authoritative where it
-is more specific than the task breakdown line. Verify what it says it assumes is
-already there — usually the output of the steps before it — and stop and report if
-it is not.
+**The detail file is a specification, not an implementation.** It gives you
+signatures, data shapes, edge cases, and the names of the tests to write — not the
+function bodies, not the test module, not the script. That is deliberate, and it is
+not an omission to stop over: writing the code is your job, and you are the only
+role in this pipeline that runs what it writes.
+
+So read it for the contract between the pieces, and then write the pieces. Where it
+names a helper and gives its signature, you decide the body. Where it names a test
+case and says what it asserts, you write the test. Where it is more specific than
+you would have been, follow it — it was written by someone who read the surrounding
+code. Where it is silent on something genuinely local — a variable name, the shape
+of a fixture, which of two equivalent helpers to call — decide and move on; that is
+not the ambiguity the **Stop instead of improvising** rule is about.
 
 ## Scope
 
