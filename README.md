@@ -161,10 +161,16 @@ pipeline stops immediately so you can look at the plan.
 
 #### Branches
 
-**One branch for the whole feature.** The first `next` creates
-`staged-build/<feature>` and records it on the `Branch:` line of
-`specs/<feature>/STATE.md`; every stage after that checks out the same branch and
-commits onto it. There is no branch per stage.
+**One branch per feature, never `main`.** The first `next` creates a branch named
+after the feature — just `<feature>`, no prefix — and records it on the `Branch:`
+line of `specs/<feature>/STATE.md`; every stage after that checks out the same
+branch and commits onto it. There is no branch per stage. If a branch of that name
+already exists, it asks whether you want to reuse it rather than checking it out on
+its own.
+
+Commits on the branch are prefixed `<feature>-stage-NN: `, so stage 03 of
+`search-index` commits as `search-index-stage-03: add the tokenizer`. `next`
+describes the commit and leaves you to make it.
 
 The orchestrator will only create a second branch if you explicitly ask —
 `/staged-build:stage next --new-branch`, or just saying so. It then records the new
@@ -232,13 +238,14 @@ gate isn't skipped: approving the plan is the most major decision there is.
 **One branch, and it commits.** If `STATE.md` already names a branch it uses that.
 Otherwise it adopts the branch you're on when that branch is a *clean new branch* —
 not the default branch, nothing dirty outside `specs/`, no commits of its own — and
-creates `staged-build/<feature>` when it isn't. Either way it records the name and
-tells you which happened.
+creates `<feature>` when it isn't. If `<feature>` already exists, that's a major
+decision: it stops and asks whether to reuse it. Either way it records the name and
+tells you which happened. It never builds a stage on `main`.
 
-Then one commit per stage, and one per `[large]` step within a stage. It never
-creates a second branch, never deletes one, and never merges, rebases, or pushes —
-pushing is outward-facing, so it's outside what `yolo` authorizes even when the
-branch has a remote. If the run stops on a major issue, the tree is left exactly as
+Then one commit per stage, and one per `[large]` step within a stage, each message
+prefixed `<feature>-stage-NN: `. It never creates a second branch, never deletes
+one, and never merges, rebases, or pushes — pushing is outward-facing, so it's
+outside what `yolo` authorizes even when the branch has a remote. If the run stops on a major issue, the tree is left exactly as
 it is rather than tidied up.
 
 #### What the judges don't see

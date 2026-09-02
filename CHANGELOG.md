@@ -5,6 +5,31 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-02
+
+Branch and commit conventions for feature work.
+
+### Changed
+
+- **Feature branches are named `<feature>`, not `staged-build/<feature>`.** The
+  prefix carried no information the `Branch:` line in `STATE.md` didn't already
+  hold, and it made branches awkward to type and to read in `git branch`.
+  Both orchestrators, and the plan-architect's `STATE.md` template, now say so.
+
+- **A branch that already exists is now a question, not an assumption.** `next` and
+  `yolo` used to check out an existing `<feature>` branch silently. Reusing a branch
+  someone else started is not cheaply reversible, so both now stop and ask, showing
+  what is already on it. Under `yolo` this is a major decision, which stops the run.
+
+- **Commits on a feature branch are prefixed `<feature>-stage-NN: `** rather than
+  `stage NN: `. Across a repo with several features in flight, `stage 03:` says
+  nothing about which feature it belongs to. This applies to the message `yolo`
+  commits, the per-`[large]`-step message it hands the implementer, the `jj`
+  change description, and the message `next` describes for the user to commit.
+
+- **Neither orchestrator will build a stage on `main`/`master`.** This was implied
+  before by the branch-resolution rules; it is now stated as its own constraint.
+
 ## [0.5.0] — 2026-09-02
 
 Rebalances the pipeline away from planning and towards building.

@@ -82,8 +82,13 @@ If several exist and the user did not name one, ask which. Never guess.
 
 ## Branch policy
 
-**One branch for the whole feature.** Every stage is implemented and committed on
-the same branch. Never create a branch per stage.
+**One branch per feature, and never the default branch.** Every stage is
+implemented and committed on that same branch. Never create a branch per stage, and
+never run a stage on `main`/`master` — if resolving the branch would leave you on
+the default branch, stop and sort the branch out first.
+
+**The branch is named after the feature and nothing else: `<feature>`.** No
+`staged-build/` prefix, no stage number, no date.
 
 The `Branch:` line of `specs/<feature>/STATE.md` is the single source of truth for
 which branch that is. Read it at the start of every stage and act on what it says:
@@ -94,23 +99,43 @@ which branch that is. Read it at the start of every stage and act on what it say
   deleted or renamed it; do not silently make a new one on top of whatever HEAD
   happens to be.
 - **It says `(not created yet)`, or there is no such line** → this is the feature's
-  first stage. Create `staged-build/<feature>` from the current HEAD with
-  `git checkout -b`, then write that name onto the `Branch:` line of STATE.md,
-  adding the line under `Goal:` if it is missing. If a branch of that name already
-  exists, check it out and record it rather than inventing a variant.
+  first stage, and the branch to use is `<feature>`.
+
+  - **No branch of that name exists** → create it from the current HEAD with
+    `git checkout -b <feature>`.
+  - **`<feature>` already exists** → **ask the user before touching it.** Show what
+    is already on it (`git log --oneline <default-branch>..<feature>`) and ask
+    whether to reuse that branch or use a different name. Do not check it out,
+    reset it, or quietly invent a variant on your own.
+
+  Then write the resulting name onto the `Branch:` line of STATE.md, adding the
+  line under `Goal:` if it is missing.
 
 **Create a second branch only when the user explicitly asks for one.** Explicitly
 means they said so — `next --new-branch`, or asking in prose. A stage being large,
 risky, long-running, or unrelated to the last one is not a reason, and neither is
 your own sense that the history would be tidier. When they do ask: propose the name
-(default `staged-build/<feature>-<n>` for the next free `n`), create it from the
-current branch, and overwrite the `Branch:` line so every stage after it reuses the
-new branch too.
+(default `<feature>-<n>` for the next free `n`), create it from the current branch,
+and overwrite the `Branch:` line so every stage after it reuses the new branch too.
 
 **Never delete a branch on your own** — not in `redo`, not anywhere.
 
 In a **jj** repo none of this applies: `jj new` starts a change, not a branch, so
 keep starting one per stage. Do not create or move bookmarks unless the user asks.
+
+## Commit messages
+
+Every commit on the feature branch — whoever makes it — is prefixed with the
+feature name and the stage number:
+
+```
+<feature>-stage-NN: <what the commit does>
+```
+
+So stage 03 of the `search-index` feature commits as
+`search-index-stage-03: add the tokenizer`. `next` does not commit — it describes
+the commit and leaves it to the user — but the message it describes uses this
+prefix.
 
 ---
 
@@ -174,7 +199,7 @@ Take **one** stage from pending to done. One. Never begin a second.
      anything else is dirty, stop and say so. Then get on the feature branch
      exactly as **Branch policy** above describes. Reuse it; the branch is per
      feature, not per stage.
-   - jj repo → `jj new -m "stage NN: <title>"`
+   - jj repo → `jj new -m "<feature>-stage-NN: <title>"`
    - neither → ask the user whether to proceed with no version control. Do not
      assume.
 
@@ -257,10 +282,11 @@ Take **one** stage from pending to done. One. Never begin a second.
       plan-check findings that were fixed before implementation, the review findings
       that were accepted as non-blocking, and any debug cycles run.
     - Mark the row `done` in STATE.md.
-    - Describe the commit the user should make **on the feature branch** (jj: the
-      change is already there, suggest a `jj describe` message; git: the suggested
-      `git commit` message). Do not commit for them unless they ask, and do not
-      branch, merge, rebase, or push.
+    - Describe the commit the user should make **on the feature branch**, with a
+      `<feature>-stage-NN: ` prefixed message (jj: the change is already there, so
+      suggest a `jj describe` message; git: the suggested `git commit` message). Do
+      not commit for them unless they ask, and do not branch, merge, rebase, or
+      push.
     - **Stop. Never auto-continue to the next stage.** The user runs `next` again
       when they are ready. Say which stage is next and stop.
 

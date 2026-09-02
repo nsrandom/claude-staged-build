@@ -278,7 +278,11 @@ in the log.
 
 # Branch and commit policy
 
-## Branch — one for the whole feature
+## Branch — one per feature, never the default branch
+
+**No stage of this run may be built on `main`/`master`.** A feature gets its own
+branch, and that branch is named after the feature and nothing else: `<feature>`.
+No `staged-build/` prefix, no stage number, no date.
 
 The `Branch:` line of `specs/<feature>/STATE.md` is the single source of truth.
 Resolve it once, at the start of the run:
@@ -287,8 +291,8 @@ Resolve it once, at the start of the run:
   nothing.
 - **It names a branch that does not exist** → major. Stop and ask. Someone deleted
   or renamed it; do not silently branch from wherever HEAD happens to be.
-- **It says `(not created yet)`, or the line is missing** → decide between adopting
-  the current branch and creating a new one:
+- **It says `(not created yet)`, or the line is missing** → resolve it from the
+  repo state:
 
   ```sh
   DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
@@ -296,20 +300,27 @@ Resolve it once, at the start of the run:
   git branch --show-current
   git status --porcelain -- ':!specs'
   git rev-list --count "$DEFAULT"..HEAD
+  git show-ref --verify --quiet "refs/heads/<feature>" && echo exists || echo absent
   ```
 
   **Adopt the current branch** when all three hold: it is not `$DEFAULT`, nothing
   outside `specs/` is dirty, and it has no commits of its own (`rev-list --count`
   is `0`). That is "a clean new branch already", and making another one on top of
-  it just adds noise.
+  it just adds noise — its name does not have to be `<feature>`.
 
-  **Otherwise create `staged-build/<feature>`** from the current HEAD with
-  `git checkout -b`. If a branch of that name already exists, check it out rather
-  than inventing a variant.
+  **Otherwise the branch is `<feature>`:**
 
-  Either way, write the resulting name onto the `Branch:` line of STATE.md, adding
-  the line under `Goal:` if it is missing, and say in your first report which of
-  the two happened and why.
+  - **It does not exist** → create it from the current HEAD with
+    `git checkout -b <feature>`.
+  - **It already exists** → **major. Stop and ask the user whether to reuse it**,
+    showing what is already on it (`git log --oneline "$DEFAULT"..<feature>`).
+    Reusing someone else's branch is not cheaply reversible, so it is not a call
+    `yolo` makes on its own. Do not check it out, reset it, or invent a variant
+    while you wait for an answer.
+
+  Once resolved, write the name onto the `Branch:` line of STATE.md, adding the
+  line under `Goal:` if it is missing, and say in your first report which of these
+  happened and why.
 
 Every stage of the run uses that one branch. **Never create a second branch, never
 delete a branch, and never merge, rebase, or push.** Pushing is outward-facing and
@@ -325,19 +336,25 @@ makes it, because there is nobody there to make it. Commit only on this branch,
 only with `git add -A && git commit`, and never with `--amend`, `--force`, or a
 reset.
 
+**Every commit message on this branch is prefixed `<feature>-stage-NN: `** — the
+feature name, the stage number, then what the commit does. Stage 03 of the
+`search-index` feature commits as `search-index-stage-03: add the tokenizer`.
+
 - **One commit per stage**, made by you after the stage passes validation:
 
   ```
-  stage NN: <stage title>
+  <feature>-stage-NN: <stage title>
   ```
 
   Include the stage's `specs/` files in it, so the branch carries its own plan.
 
 - **Optionally one per `[large]` step.** When a stage's detail file marks any step
   `[large]`, tell the implementer in its prompt to run
-  `git add -A && git commit -m "stage NN: <step title>"` as it finishes each one,
-  and to run no other git command. Your stage commit then picks up the remainder.
-  Do not ask for per-step commits in a jj repo — a jj change accumulates instead.
+  `git add -A && git commit -m "<feature>-stage-NN: <step title>"` as it finishes
+  each one — spell the prefix out literally with the feature name and stage number
+  already substituted — and to run no other git command. Your stage commit then
+  picks up the remainder. Do not ask for per-step commits in a jj repo — a jj
+  change accumulates instead.
 
 - **Record the stage base before the implementer runs**:
   `git rev-parse HEAD`. Because the implementer may have committed mid-stage,
@@ -389,7 +406,7 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
 
 1. **Check the tree.** `git status --porcelain -- ':!specs'` must be clean.
    Changes under `specs/` are expected — that is the plan itself. Anything else
-   dirty is major: stop. In a jj repo, `jj new -m "stage NN: <title>"`.
+   dirty is major: stop. In a jj repo, `jj new -m "<feature>-stage-NN: <title>"`.
 
 2. **Mark the row `in-progress`** in STATE.md.
 
@@ -463,7 +480,8 @@ Per stage, this is `next`'s pipeline with the yolo deltas folded in.
       as non-blocking, any debug cycles run, and the IDs of the decisions this
       stage logged.
     - Mark the row `done` in STATE.md.
-    - Commit: `git add -A && git commit -m "stage NN: <title>"`, or `jj describe`.
+    - Commit: `git add -A && git commit -m "<feature>-stage-NN: <title>"`, or
+      `jj describe` with the same message.
     - Tick the todo, print one line saying the stage passed and which is next, and
       **go straight into it.**
 
