@@ -4,8 +4,9 @@ A Claude Code plugin that runs development as a staged pipeline, with a differen
 model in each role.
 
 A plan is broken into stages that can each ship on their own. Every stage is
-implemented, reviewed, and then **independently validated** before the next one
-starts. `/staged-build:stage next` runs exactly one stage per invocation and stops;
+specified, implemented, and then **independently verified** — read against its
+contract *and* actually run — before the next one starts.
+`/staged-build:stage next` runs exactly one stage per invocation and stops;
 `/staged-build:yolo` runs the whole plan end to end and stops only for decisions
 that are genuinely yours to make.
 
@@ -13,41 +14,46 @@ that are genuinely yours to make.
 
 | Role | Model | Tools | Does |
 |---|---|---|---|
-| `plan-architect` | opus | Read, Grep, Glob, Write, Bash | Designs the plan and proposes the stages. Asks rather than assumes. No code. |
-| `stage-architect` | opus | Read, Grep, Glob, Write, Bash | Turns one stage into a precise, implementable spec. Splits it if too large. No code. |
-| `plan-checker` | opus | Read, Grep, Glob, Bash | Checks a stage's plan against the real codebase before anything is built. No Write/Edit. |
-| `implementer` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Implements exactly one stage. |
-| `reviewer` | sonnet | Read, Grep, Glob, Bash | Reads the diff against the stage file. No Write/Edit. |
-| `validator` | sonnet | Read, Bash, Grep, Glob | Runs the thing and observes it. Never fixes. |
-| `debugger` | sonnet | Read, Edit, Bash, Grep, Glob | Root cause, minimal fix, or replans a wrong stage. |
+| `plan-architect` | opus | Read, Grep, Glob, Write, Edit, Bash | Designs the plan and writes it straight to `specs/<feature>/`. Asks rather than assumes. No code. |
+| `stage-runner` | sonnet | Read, Write, Edit, Bash, Grep, Glob, Agent | Ephemeral sub-orchestrator. Runs one stage's whole lifecycle in an isolated context and returns ≤1000 tokens. |
+| `stage-architect` | opus | Read, Grep, Glob, Write, Edit, Bash | Turns one stage into a precise, implementable spec on disk. Splits it if too large. No code. |
+| `implementer` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Implements exactly one stage, and self-heals when verification fails. |
+| `verifier` | sonnet | Read, Grep, Glob, Bash | Reads the diff against the contract *and* runs the thing. Never fixes. |
 
-**Planning happens in two passes, at two altitudes.** The plan-architect works out
-*what* to build and *in what order*, and settles it with you before anything is
-written. The stage-architect then works out *how*, one stage at a time, so a
-stage's detailed spec is written after the stages before it have actually landed —
-informed by what the code really became rather than by what the plan predicted.
+Five roles, and the two structural ideas that make them work:
 
-**No plan is implemented until it has been checked against the codebase.** Once the
-stage-architect has written a stage's implementation plan, the `plan-checker` reads
-the repository — and runs things against it — looking for the defects that a
-passing test suite would never surface: behaviour the contract asks for that the
-plan can't deliver, a secret that reaches a log or an assertion message, a
-documented idiom that silently does nothing, an irreversible action nobody
-authorized. It deliberately does *not* verify every citation or build a coverage
-map; a wrong regex or a bad path is cheaper to find by running the code. One check
-per stage, and a plan that fails goes back to the stage-architect for a single
-revision pass.
+**The root orchestrator stays small.** It talks to you, owns the plan files, and
+delegates each stage whole to an ephemeral `stage-runner`. That runner drives
+`stage-architect`, `implementer`, and `verifier`, commits, writes the stage report
+to disk, and dies — handing back a summary of at most 1000 tokens. Test
+transcripts, diffs, and fix cycles never reach your conversation. That is what lets
+a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history.
+
+**Subagents write evidence to disk, not into the chat.** The `implementer` and
+`stage-architect` return a structured payload of ≤250 tokens and put the exhaustive
+material — line-by-line changes, real test output, per-file plans — in
+`specs/<feature>/stages/`. `/staged-build:analyze-tokens` audits whether they
+actually did.
+
+**Planning happens at two altitudes.** The plan-architect works out *what* to build
+and *in what order*, and settles it with you. The stage-architect then works out
+*how*, one stage at a time — so a stage's spec is written after the stages before
+it have actually landed, informed by what the code really became rather than by
+what the plan predicted. For stage N > 1 it is given the Summary and Changes
+sections of every prior stage report as ground truth, which is what stops stage 05
+from being specified against an interface stage 03 never built.
+
+**The verifier is given the contract and the diff, and nothing else** — never the
+implementation plan, the implementer's report, or the decision log. It re-derives
+whether the stage works from what it reads and what it observes, rather than
+inheriting anyone's conclusion. That independence is the point of the role, and the
+orchestrator is instructed not to "help" by passing along context that would
+compromise it.
 
 The plan itself is capped: a stage's `detail.md` stays under ~300 lines and never
 contains a complete implementation of any file. A spec longer than the diff it
-describes is a defect — it gets planned, checked, and argued over, and then thrown
-away when the implementer writes the real thing.
-
-The **validator is given only the stage file** — never the implementer's report or
-the reviewer's verdict. It re-derives whether the stage works from observed
-behavior rather than inheriting anyone's conclusion. That independence is the
-point of the role; the orchestrator is instructed not to "help" by passing along
-context that would compromise it.
+describes is a defect — it gets planned and argued over, then thrown away when the
+implementer writes the real thing.
 
 ## Install
 
@@ -74,7 +80,7 @@ Verify it loaded:
 claude plugin details staged-build
 ```
 
-You should see 7 agents and 2 commands.
+You should see 5 agents and 4 commands.
 
 ### Developing on it
 
@@ -102,36 +108,36 @@ claude plugin uninstall staged-build && claude plugin install staged-build@stage
 ### Names after install
 
 Everything is namespaced by the plugin. The commands are
-**`/staged-build:stage`** and **`/staged-build:yolo`**, not `/stage` and `/yolo`.
-The agents are `staged-build:plan-architect`,
-`staged-build:stage-architect`, `staged-build:plan-checker`,
-`staged-build:implementer`, `staged-build:reviewer`, `staged-build:validator`,
-`staged-build:debugger` — the names you see in `@`-mention typeahead, and the names
+**`/staged-build:stage`**, **`/staged-build:yolo`**, **`/staged-build:cleanup`**,
+and **`/staged-build:analyze-tokens`** — not `/stage` and `/yolo`. The agents are
+`staged-build:plan-architect`, `staged-build:stage-runner`,
+`staged-build:stage-architect`, `staged-build:implementer`, and
+`staged-build:verifier` — the names you see in `@`-mention typeahead, and the names
 the orchestrator delegates to.
 
 ## Usage
 
 ### `/staged-build:stage plan "<goal>"`
 
-Planning is a conversation, not a single shot. The plan-architect reads the repo,
-analyses the goal for feasibility, and comes back with a **proposal** — no files
-written yet. You then:
+Planning is a conversation, not a single shot — but it is grounded in a real file
+from the first pass. The plan-architect reads the repo, analyses the goal for
+feasibility, and **writes the plan straight to `specs/<feature>/`**: `SPEC.md`,
+`STATE.md`, an empty `DECISIONS.md`, and a `SESSION_STATE.json`. You then read the
+actual files in your editor, and:
 
 - **Answer its questions.** It is instructed to ask rather than assume, and to give
-  a sensible default for each question so you can wave through the ones you don't
-  care about.
+  a sensible default for each so you can wave through the ones you don't care about.
 - **Change the stages.** Add, remove, merge, split, reword, or reorder any of them.
-  It follows your edits rather than re-arguing them.
+  It edits the files in place rather than re-arguing them.
 
-It re-proposes until you're happy, and only then writes `SPEC.md` and `STATE.md`.
-No code is written, and no stage specs exist yet.
+It iterates until you're happy. No code is written, and no stage specs exist yet.
 
 Anything the plan-architect cannot confirm is feasible becomes **stage 01** — a
 short investigation stage that answers the question and writes down the finding, so
 the rest of the plan isn't built on a guess.
 
 Subagents can't prompt you directly (Claude Code removes `AskUserQuestion` from
-every subagent), so the orchestrator relays the questions and your answers in both
+every subagent), so the orchestrator relays questions and answers in both
 directions.
 
 ### `/staged-build:stage next`
@@ -141,23 +147,28 @@ Takes **one** stage from pending to done:
 1. Gets on the feature's branch (`jj new`, or the one `git` branch for this feature
    — see [Branches](#branches))
 2. Marks the stage `in-progress`
-3. **stage-architect** writes the stage's acceptance contract and implementation plan
-4. **plan-checker** checks that plan against the codebase → `VERDICT: PASS` / `FAIL`
-   (once per stage — there is no per-step check)
-5. On FAIL → **stage-architect** revises the plan, then re-check (max 1 cycle).
-   Nothing is implemented until the plan passes.
-6. **implementer** implements it
-7. **reviewer** reviews the diff, happy path and failure paths → `VERDICT: PASS` / `FAIL`
-8. On FAIL → **debugger**, then re-review (max 2 cycles)
-9. **validator** independently verifies, given only the stage file
-10. On FAIL → **debugger**, then re-validate (max 2 cycles)
-11. On PASS → writes a stage report, marks it `done`, describes the commit, **stops**
+3. **stage-architect** writes the acceptance contract and the implementation plan
+   to disk, and returns a ≤250-token summary
+4. **You verify the plan.** The orchestrator shows the criteria, the verification
+   command, the files in scope, and the test plan, and asks before anything is
+   built. Want changes? The stage-architect revises the files in place.
+5. **stage-runner** takes it from there in an isolated context:
+   **implementer** implements → **verifier** reads the diff *and* runs it →
+   `VERDICT: PASS` / `FAIL`
+6. On FAIL → the findings go straight back to the **implementer** to self-heal,
+   then re-verify (max 2 cycles)
+7. On PASS → commits the stage, writes `NN-slug.report.md`, and returns a short
+   summary. The orchestrator marks it `done` and **stops**
 
 It never auto-continues. Run `next` again for the following stage.
 
-If the debugger concludes the *stage spec* was wrong rather than the code, it
-updates the stage file, marks the stage `blocked`, and reports `REPLANNED` — the
-pipeline stops immediately so you can look at the plan.
+If the implementer concludes the *stage spec* was wrong rather than the code, it
+returns `REPLANNED` — the stage is marked `blocked` and the pipeline stops
+immediately so you can look at the plan.
+
+Minor decisions taken along the way are logged to `DECISIONS.md` in `next` too, not
+just in `yolo`. That keeps the flow moving without stopping on a variable name, and
+leaves the audit trail for `/staged-build:cleanup`.
 
 #### Branches
 
@@ -169,12 +180,11 @@ already exists, it asks whether you want to reuse it rather than checking it out
 its own.
 
 Commits on the branch are prefixed `<feature>-stage-NN: `, so stage 03 of
-`search-index` commits as `search-index-stage-03: add the tokenizer`. `next`
-describes the commit and leaves you to make it.
+`search-index` commits as `search-index-stage-03: add the tokenizer`. In `next` the
+`stage-runner` makes that commit once verification passes.
 
 The orchestrator will only create a second branch if you explicitly ask —
-`/staged-build:stage next --new-branch`, or just saying so. It then records the new
-branch in STATE.md and every following stage uses that one. It never deletes a
+`/staged-build:stage next --new-branch`, or just saying so. It never deletes a
 branch, including in `redo`, and it never merges, rebases, or pushes.
 
 If the recorded branch has gone missing, `next` stops and asks rather than quietly
@@ -185,20 +195,21 @@ stage still starts its own change and bookmarks are left alone.
 
 ### `/staged-build:stage status`
 
-The stage table plus the most recent stage report. Changes nothing.
+The stage table, the branch, the session state, a decision summary by tier and
+status, what's in the scratchpad, and the latest stage report. Changes nothing.
 
 ### `/staged-build:stage redo`
 
-Resets the current stage to `pending`, abandons its change, and runs `next` again.
-It asks before destroying work, naming the exact ref it would reset to. It stays on
-the feature branch — the branch holds every earlier stage, so `redo` resets the
-current stage's work off it rather than deleting it.
+Resets the current stage to `pending`, discards its work, and runs `next` again.
+It asks before destroying anything, naming the exact ref it would reset to. It
+stays on the feature branch — the branch holds every earlier stage, so `redo`
+resets the current stage's work off it rather than deleting it.
 
 ### `/staged-build:yolo`
 
-Runs **every** pending stage, back to back, committing as it goes. Same pipeline
-per stage — stage-architect, plan-checker, implementer, reviewer, validator — with
-three differences.
+Runs **every** pending stage, back to back, committing as it goes. Each stage goes
+to its own `stage-runner`, so the root orchestrator collects short summaries rather
+than twenty stages of build output.
 
 **It decides small things itself.** Every judgement call a subagent hands back is
 triaged as major or minor. Minor is naming, placement, a default value, message
@@ -208,22 +219,23 @@ acceptance criteria, anything not cheaply reversible (data model, schema,
 migration, on-disk or wire format, public API, new dependency), anything touching
 auth, credentials, billing, or user data, anything destructive or outward-facing,
 and any convention you haven't set. The pipeline's own stop conditions — the
-implementer stopping, a `REPLANNED`, a check that still fails after its cycles —
-are always major.
+implementer stopping, a `REPLANNED`, verification still failing after 2 fix cycles
+— are always major.
 
 If it's still weighing which one a call is, it treats it as major. A wrong minor
 decision costs an edit; a wrong major one costs every stage built on top of it.
+
+**Minor decisions come in two tiers.** Tier 1 is a routine convention — a name, a
+default, a log message, where a test file goes. Tier 2 shapes behaviour or a
+contract — strict versus lenient validation, evaluation ordering, an addition to a
+public surface, fallback behaviour when something optional is absent. Both get
+decided without stopping; the tier decides how much of your attention each gets
+back at cleanup.
 
 **Every minor decision stays changeable.** It has to land as one named place to
 change — a named constant, a default parameter, a single config key — and the log
 records that `file:line`. One named place, not an abstraction layer: over-building
 a small decision is itself a decision you didn't ask for.
-
-**You review the decisions at the end.** They accumulate in
-`specs/<feature>/DECISIONS.md`, and when the last stage passes, `yolo` adds one
-more stage to `STATE.md` — *Confirm autonomous decisions* — and walks you through
-them. Anything you don't pick is confirmed. Anything you want changed goes back to
-the plan-architect as appended stages, and the run continues through those.
 
 ```
 /staged-build:yolo                 # run the existing plan to completion
@@ -232,6 +244,8 @@ the plan-architect as appended stages, and the run continues through those.
 
 Given a goal with no plan, it runs the normal planning conversation first. That
 gate isn't skipped: approving the plan is the most major decision there is.
+
+When the last stage passes it points you at `/staged-build:cleanup`.
 
 #### Branches and commits under yolo
 
@@ -242,20 +256,75 @@ creates `<feature>` when it isn't. If `<feature>` already exists, that's a major
 decision: it stops and asks whether to reuse it. Either way it records the name and
 tells you which happened. It never builds a stage on `main`.
 
-Then one commit per stage, and one per `[large]` step within a stage, each message
-prefixed `<feature>-stage-NN: `. It never creates a second branch, never deletes
-one, and never merges, rebases, or pushes — pushing is outward-facing, so it's
-outside what `yolo` authorizes even when the branch has a remote. If the run stops on a major issue, the tree is left exactly as
+Then one commit per stage, each message prefixed `<feature>-stage-NN: `. It never
+creates a second branch, never deletes one, and never merges, rebases, or pushes —
+pushing is outward-facing, so it's outside what `yolo` authorizes even when the
+branch has a remote. If the run stops on a major issue, the tree is left exactly as
 it is rather than tidied up.
 
-#### What the judges don't see
+#### What the judge doesn't see
 
-The reviewer, validator, and plan-checker never receive the decision log or the
-autonomy policy. Telling a judge which departures were pre-approved is how it stops
-being one. The validator in particular still gets the stage file and nothing else —
-unattended running makes that the last independent check in the pipeline, not a
-formality to trim. If the reviewer flags a logged decision, that's a real finding
-and goes to the debugger like any other.
+The verifier never receives the decision log or the autonomy addendum. Telling a
+judge which departures were pre-approved is how it stops being one. It gets the
+contract and the diff — unattended running makes that the last independent check in
+the pipeline, not a formality to trim. If the verifier flags a logged decision,
+that's a real finding and goes back to the implementer like any other.
+
+### `/staged-build:cleanup`
+
+The last stage of a feature: you find out what was decided in your absence and say
+whether you agree.
+
+It **starts in a fresh context** loaded only from disk — the session state, the
+spec, the stage table, the decision log, and a listing of the scratchpad. That
+reset is the reason it's a separate command rather than the tail of `yolo`: a
+twenty-stage run leaves a transcript that would swamp the review, and none of it is
+needed to ask whether you agree with a decision.
+
+Then:
+
+- **Tier 1 in one batch.** Every routine decision in a single table, with one
+  question: confirm all of them, or pick any you want to look at.
+- **Tier 2 one at a time.** For each: the problem, what was decided and the
+  `file:line` that holds it, and the tradeoffs. You can confirm, reject, defer, ask
+  a follow-up, or ask for a modification.
+- **A real cleanup stage.** If anything was rejected or modified, or if the
+  scratchpad still exists, it appends a stage to `STATE.md` and runs it through the
+  normal pipeline — stage-architect, implementer, verifier, commit. The verifier
+  confirms the remediations landed, the scratchpad is gone, and the tests still
+  pass.
+
+### `/staged-build:analyze-tokens`
+
+Where the tokens, the wall-clock time, and the tool calls actually went — per role,
+per stage, per subagent run. It reads Claude Code's own transcripts under
+`~/.claude/projects/`, and writes `tokens_efficiency_report.md` and `.json` into
+`specs/<feature>/`.
+
+It also audits the pipeline's own invariants, and this is the part worth running:
+
+- **`verifier-independence`** — did anything reach the verifier that shouldn't
+  have? A stage whose verifier saw the implementation plan has a verdict worth less
+  than it looks.
+- **`return-payload`** — did the implementer and stage-architect stay inside their
+  ≤250-token budgets, or did the evidence leak upward instead of going to disk?
+- **`retry-loop` / `retry-budget`** — how many fix cycles each stage really took.
+- **`latency` / `runaway-turns`** — which agent ran long, and what tool it was
+  thrashing on.
+
+Run it whenever a stage feels slow, not only at the end; `yolo` and `next` will
+suggest it themselves if a stage exceeds ~15 minutes or 2 fix cycles.
+
+```bash
+/staged-build:analyze-tokens
+/staged-build:analyze-tokens --feature search-index
+```
+
+The script is plain Python with no dependencies, so you can also run it directly:
+
+```bash
+python3 scripts/analyze_tokens.py --repo . --feature search-index
+```
 
 ## State layout
 
@@ -263,34 +332,39 @@ Plan state lives in `specs/`, in your project, one directory per feature:
 
 ```
 specs/<feature>/
-  SPEC.md                    # goal, context, approach, stages, non-goals
-  STATE.md                   # the stage table and each stage's status
+  SPEC.md                        # goal, context, approach, stages, non-goals
+  STATE.md                       # the stage table, and the feature's Branch: line
+  DECISIONS.md                   # decisions taken without asking, with tiers
+  SESSION_STATE.json             # test command, runtime, and other environment facts
+  scratchpad/                    # one-off throwaway verification code (gitignored)
+  tokens_efficiency_report.md    # written by analyze-tokens
+  tokens_efficiency_report.json  # the same data, for comparing runs later
   stages/
-    01-slug.md               # acceptance contract: criteria, verification, out-of-scope
-    01-slug.detail.md        # implementation plan: signatures, edge cases, test plan
-    01-slug.report.md        # written when the stage passes validation
-  DECISIONS.md               # yolo only: decisions taken without asking
+    01-slug.md                   # acceptance contract: criteria, verification, out-of-scope
+    01-slug.detail.md            # implementation plan: signatures, edge cases, test plan
+    01-slug.report.md            # evidence, and what actually landed
 ```
 
-`STATE.md` also carries the feature's `Branch:` line — the one branch every stage
-is built on.
+`SPEC.md`, `STATE.md`, `DECISIONS.md`, and `SESSION_STATE.json` are written by the
+plan-architect up front. Everything under `stages/` is written when that stage
+begins — so a stage spec reflects the code as it actually exists by then, not as
+the plan predicted it would.
 
-`DECISIONS.md` is written only by `/staged-build:yolo`, and only by the
-orchestrator — subagents report their decisions and it transcribes them, so the
-format stays uniform and the log is complete even if the run stops mid-stage. Each
-entry carries the call that was open, what was chosen and over what, why, the
-`file:line` that holds it, and a status of `unconfirmed`, `confirmed`, or
-`changed → stage NN`.
+**`SESSION_STATE.json` is the cure for environment amnesia.** The test command, the
+interpreter path, the flag your suite needs — recorded once, read by every later
+stage, and reloaded by `cleanup` after the context reset.
 
-`SPEC.md` and `STATE.md` are written by the plan-architect up front. Everything
-under `stages/` is written by the stage-architect when that stage begins — so a
-stage spec reflects the code as it actually exists by then, not as the plan
-predicted it would.
+**`scratchpad/` is where throwaway code is allowed to be ugly.** When an agent needs
+a probe script, a scratch database, or a harness that reaches into internals to
+confirm an assumption, it goes there. The directory is gitignored, the verifier
+checks that nothing of that kind leaked into `src/` or the main tests directory,
+and `cleanup` deletes it. Long-term tests go in the project's real tests directory
+instead — the stage-architect specifies which is which.
 
 The split between `NN-slug.md` and `NN-slug.detail.md` is deliberate: the contract
-holds only externally checkable behavior, and it is the single file the validator
-receives. The implementation plan never reaches it, so the validator cannot end up
-checking the code against the implementer's own intentions.
+holds only externally checkable behaviour, and it is the only stage file the
+verifier receives. The implementation plan never reaches it, so the verifier cannot
+end up checking the code against the implementer's own intentions.
 
 This is per-project working state. It is never bundled with the plugin. Commit it
 or don't — the pipeline ignores `specs/` when it checks whether your tree is clean,
@@ -309,12 +383,10 @@ Defaults live in `pipeline.json` at the plugin root:
 ```json
 {
   "plan-architect": "opus",
+  "stage-runner": "sonnet",
   "stage-architect": "opus",
-  "plan-checker": "opus",
   "implementer": "sonnet",
-  "reviewer": "sonnet",
-  "validator": "sonnet",
-  "debugger": "sonnet"
+  "verifier": "sonnet"
 }
 ```
 
@@ -324,12 +396,10 @@ project. It replaces the plugin default. No agent files need editing:
 ```json
 {
   "plan-architect": "opus",
+  "stage-runner": "sonnet",
   "stage-architect": "opus",
-  "plan-checker": "opus",
   "implementer": "haiku",
-  "reviewer": "opus",
-  "validator": "sonnet",
-  "debugger": "opus"
+  "verifier": "opus"
 }
 ```
 
@@ -341,10 +411,6 @@ Resolution order, highest first:
    the agents still work if both configs are missing
 
 Values are model aliases: `opus`, `sonnet`, `haiku`, `fable`.
-
-A role may name an *agent* instead of a model in a future version — see
-[docs/gemini-optional.md](docs/gemini-optional.md). That path is designed but not
-built; the object form is ignored today.
 
 ## Two environment variables that will silently break this
 
@@ -370,9 +436,9 @@ Set it to `inherit` to restore normal resolution.
 
 In interactive sessions, subagents default to running in the **background**, and
 their results arrive a turn later. The pipeline is strictly sequential — the
-reviewer needs the implementer's diff, the debugger needs the reviewer's findings
-— so backgrounding breaks it: steps fire out of order, or against a diff that does
-not exist yet.
+verifier needs the implementer's diff, the implementer needs the verifier's
+findings — so backgrounding breaks it: steps fire out of order, or against a diff
+that does not exist yet.
 
 Add this to `~/.claude/settings.json` (or the project's `.claude/settings.json`):
 
@@ -389,8 +455,9 @@ matters interactively.
 
 ## Verifying that routing actually worked
 
-Don't take the pipeline's word for it. Each subagent writes its own transcript,
-which records the model it really ran on:
+Don't take the pipeline's word for it. `/staged-build:analyze-tokens` reports the
+model each role really ran on, but you can also read it straight off the
+transcripts:
 
 ```bash
 # after a run, from the project directory
@@ -409,9 +476,7 @@ Example output from a real run of this pipeline:
 "agentType":"staged-build:plan-architect"   "model":"claude-opus-5"
 "agentType":"staged-build:stage-architect"  "model":"claude-opus-5"
 "agentType":"staged-build:implementer"      "model":"claude-sonnet-5"
-"agentType":"staged-build:reviewer"         "model":"claude-opus-5"
-"agentType":"staged-build:validator"        "model":"claude-sonnet-5"
-"agentType":"staged-build:debugger"         "model":"claude-opus-5"
+"agentType":"staged-build:verifier"         "model":"claude-sonnet-5"
 ```
 
 Each line pairs the scoped agent name with the model it used. If every line shows
@@ -419,13 +484,14 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
 
 ## Requirements and limits
 
-- No system-level permissions and no external binaries.
+- No system-level permissions and no external binaries. `analyze-tokens` needs
+  `python3`, which macOS and every Linux distribution already have.
 - Writing files under `specs/` needs the normal edit permission you'd grant any
   Claude Code session.
-- **The validator and debugger must be able to run your test command.** They are
-  the two roles whose whole job is executing the code rather than reading it. If
-  your project's runner isn't permitted, both stop and report the denial — which
-  is correct behavior, but it halts the stage. Allow the runner in your project's
+- **The verifier and implementer must be able to run your test command.** They are
+  the two roles whose job involves executing the code rather than reading it. If
+  your project's runner isn't permitted, they stop and report the denial — which is
+  correct behaviour, but it halts the stage. Allow the runner in your project's
   `.claude/settings.local.json`:
 
   ```json
@@ -436,25 +502,22 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
   }
   ```
 
-  Use whatever your stage's **Verification** command actually invokes. The
-  debugger will not work around a denial — it will not disable the sandbox, and
-  it will not "fix" a failure it was never able to reproduce.
-- **The plan-checker never modifies your tree.** It has no Write and no Edit. It
-  may run things — a snippet from the plan, a glob, a scratch reproduction in
-  `/tmp` — because a finding it demonstrated beats one it reasoned about, but it
-  makes no change inside the repository and runs no build that leaves artifacts
-  there.
+  Use whatever your stage's **Verification** command actually invokes. The verifier
+  will not work around a denial — it will not disable the sandbox, and it will not
+  report a pass it never observed.
+- **The verifier never modifies your tree.** It has no Write and no Edit. It runs
+  things — the verification command, your test suite, the CLI it is checking —
+  because a finding it demonstrated beats one it reasoned about, but it makes no
+  change inside the repository.
+- **`stage-runner` needs the Agent tool** to spawn its three subagents. If nested
+  delegation is unavailable in your setup, it halts and says so rather than quietly
+  doing the work itself, and the root orchestrator runs the stage directly.
 - Plugin agents ignore `hooks`, `mcpServers`, and `permissionMode` frontmatter —
   this plugin does not use those fields.
 - Stages are sized for roughly 400 lines of diff, and steps within a stage are
   marked `[large]` at roughly 150. A stage much larger than that is a planning bug;
   the stage-architect splits it when `next` reaches it, and the pipeline stops so
-  you can see the new breakdown before any code is written. The `[large]` mark now
-  only tells `yolo` where to put a per-step commit; it no longer buys the step a
-  check of its own.
-- Plan checking costs one extra subagent run per stage, and at most one more if the
-  plan fails and is revised. It is scoped to what a test run can't tell you; a plan
-  that fails twice stops the pipeline rather than going round again.
+  you can see the new breakdown before any code is written.
 - **`/staged-build:yolo` needs `Bash(git commit:*)` and `Bash(git add:*)`**, since
   it commits each stage rather than describing the commit for you. Without them the
   run stops on the first permission prompt, which defeats the point of running

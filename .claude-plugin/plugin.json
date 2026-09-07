@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "staged-build",
   "displayName": "Staged Build",
-  "description": "Staged, multi-model build pipeline: plan, specify, implement, review, validate, debug.",
-  "version": "0.6.0",
+  "description": "Staged, multi-agent build pipeline: plan, specify, implement, and independently verify - one stage at a time or the whole plan unattended.",
+  "version": "1.0.0",
   "author": {
     "name": "NSRandom",
     "email": "github@nsrandom.com"
@@ -11,9 +11,12 @@
   "license": "MIT",
   "keywords": [
     "pipeline",
+    "staged-build",
+    "multi-agent",
     "subagents",
     "code-review",
     "planning",
-    "multi-model"
+    "verification",
+    "autonomous"
   ]
 }

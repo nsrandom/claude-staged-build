@@ -9,8 +9,8 @@
     {
       "name": "staged-build",
       "source": "./",
-      "description": "Staged, multi-model build pipeline: plan, specify, implement, review, validate, debug.",
-      "version": "0.6.0"
+      "description": "Staged, multi-agent build pipeline: plan, specify, implement, and independently verify - one stage at a time or the whole plan unattended.",
+      "version": "1.0.0"
     }
   ]
 }

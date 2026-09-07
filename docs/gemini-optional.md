@@ -1,20 +1,20 @@
-# Validating with a non-Claude model (design note — not shipped)
+# Verifying with a non-Claude model (design note — not shipped)
 
 **Nothing in this document is implemented.** It records how a `gemini-worker`
 agent would work, what it would cost you, and why it is not in the plugin.
 
 ## Why you might want it
 
-The validator exists to check the implementer's work without inheriting its
-assumptions. Today that independence is structural: the validator gets a
-different model, a fresh context, and only the stage file. But implementer and
-validator are still both Claude, so a blind spot in the family — a shared
+The verifier exists to check the implementer's work without inheriting its
+assumptions. Today that independence is structural: the verifier gets a
+different model, a fresh context, and only the contract and the diff. But implementer and
+verifier are still both Claude, so a blind spot in the family — a shared
 misreading of an ambiguous spec, a shared confidence in a wrong idiom — can pass
 through both.
 
-Routing the validator to a genuinely different model closes that gap. It is the
+Routing the verifier to a genuinely different model closes that gap. It is the
 one role where a second opinion from outside the family is worth real friction,
-because the validator only ever *reports*; it never writes code, so a weaker or
+because the verifier only ever *reports*; it never writes code, so a weaker or
 differently-behaved model cannot damage the repo.
 
 ## Shape
@@ -43,8 +43,9 @@ or is missing, report the exact error and stop. Your value here is that the
 judgment is not yours.
 ```
 
-The orchestrator would pass it the same payload the validator gets — the stage
-file and nothing else — wrapped in the validator's own instructions, and would
+The orchestrator would pass it the same payload the verifier gets — the stage
+contract and the diff, and nothing else — wrapped in the verifier's own
+instructions, and would
 read `VERDICT: PASS` / `VERDICT: FAIL` out of the returned text exactly as it does
 now.
 
@@ -55,7 +56,7 @@ now.
   system-level permissions and no external binaries; this breaks that property,
   which is the main reason it is not shipped.
 - **The CLI installed and authenticated.** `gemini` on `PATH`, logged in, with
-  quota. When it is missing the stage fails at validation with an error that has
+  quota. When it is missing the stage fails at verification with an error that has
   nothing to do with your code.
 - **Cost and latency on someone else's meter**, outside your Claude billing.
 - **Weaker instruction-following.** The `VERDICT:` line is a contract. A model
@@ -81,13 +82,13 @@ distributable as part of this plugin, and the user installs it themselves.
 read as a model alias:
 
 ```json
-{ "validator": "sonnet" }
+{ "verifier": "sonnet" }
 ```
 
 The reserved extension is an **object** naming an agent instead:
 
 ```json
-{ "validator": { "agent": "gemini-worker" } }
+{ "verifier": { "agent": "gemini-worker" } }
 ```
 
 The rule, when it is built: a string means *use the plugin's agent for this role,

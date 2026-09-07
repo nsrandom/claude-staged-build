@@ -5,6 +5,110 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-09-06
+
+Restructures the pipeline around an ephemeral per-stage sub-orchestrator, aligning
+this plugin's architecture with its Gemini counterpart
+([nsrandom/gemini-staged-build](https://github.com/nsrandom/gemini-staged-build)).
+
+The previous design put every subagent's full output — implementation notes, test
+transcripts, diffs, review findings, debug cycles — into the root orchestrator's
+context. That works for one stage and collapses somewhere around stage six of a
+`yolo` run. Stages are now delegated whole to an ephemeral agent that dies with its
+transcript, and subagents write their evidence to disk instead of returning it.
+
+### Added
+
+- **`stage-runner`** — an ephemeral sub-orchestrator that runs one stage's entire
+  lifecycle (implement ↔ verify → commit → report) in an isolated context and
+  returns at most 1000 tokens. Verbose material never reaches the root
+  orchestrator. In `yolo` it also specifies the stage; in `next` the root keeps
+  that step so the user can approve the plan first, because subagents cannot
+  prompt the user.
+
+- **Compact return payloads.** `implementer` and `stage-architect` write exhaustive
+  detail to `specs/<feature>/stages/*.report.md` and `*.detail.md`, and return a
+  structured payload of ≤250 tokens. Raw terminal output, test-runner transcripts,
+  and code diffs are prohibited in return messages.
+
+- **`/staged-build:cleanup`** — reviews the decisions taken without asking, in a
+  deliberately fresh context loaded only from disk. Tier 1 decisions are confirmed
+  in a single batch; Tier 2 and flagged ones are walked one at a time with confirm
+  / reject / defer / follow-up / modify. Anything rejected or modified, plus the
+  scratchpad, becomes a real cleanup stage that runs through the normal pipeline.
+
+- **`/staged-build:analyze-tokens`** and `scripts/analyze_tokens.py` — reads Claude
+  Code's own transcripts under `~/.claude/projects/` and reports tokens, wall-clock
+  time, and tool calls per role, per stage, and per invocation, writing
+  `tokens_efficiency_report.md` and `.json`. It audits the pipeline's invariants:
+  verifier independence, the ≤250-token return budgets, fix-cycle counts, and
+  runaway agents. Both orchestrators suggest it when a stage exceeds ~15 minutes or
+  2 fix cycles, and when the feature completes.
+
+- **`SESSION_STATE.json`** — the test command, interpreter, and other environment
+  facts, recorded once by the plan-architect and read by every later stage. Ends
+  the environment amnesia that made each stage rediscover how to run the tests.
+
+- **`specs/<feature>/scratchpad/`** — a gitignored home for one-off verification
+  code: probe scripts, scratch databases, harnesses that reach into internals.
+  Long-term tests go to the project's main tests directory instead; the verifier
+  checks the separation held, and `cleanup` deletes the scratchpad.
+
+- **Inter-stage context bridging.** The stage-architect for stage N > 1 receives
+  the Summary and Changes sections of every prior stage report as ground truth for
+  what actually landed, which stops a late stage being specified against an
+  interface an earlier one never built.
+
+- **Tiered decisions.** Minor decisions are classified Tier 1 (routine convention)
+  or Tier 2 (shapes behaviour or a contract), which is what lets `cleanup` confirm
+  fifteen naming choices in one click and still give real attention to the four
+  that matter.
+
+### Changed
+
+- **Seven agents became five.** `reviewer` and `validator` merged into
+  **`verifier`**, which both reads the diff against the contract and runs the
+  software — the split forced two full context loads to answer one question. The
+  `debugger` was folded into `implementer`, which now self-heals from verifier
+  findings; a separate agent re-derived the whole stage from scratch to fix its own
+  code. `plan-checker` was removed: an LLM checking a plan it cannot run found
+  mostly what the implementer finds anyway, at the cost of an opus run per stage.
+  In `next` its gate is replaced by **you** approving the stage plan, which is the
+  check that was actually worth having.
+
+- **Planning writes to disk on the first pass.** `plan-architect` now saves
+  `SPEC.md`, `STATE.md`, `DECISIONS.md`, and `SESSION_STATE.json` immediately and
+  edits them in place through the conversation, so you review a real file in your
+  editor rather than a proposal in chat.
+
+- **`DECISIONS.md` is used in `next` too**, not only `yolo`. A minor decision no
+  longer stops a supervised run; it is logged and reviewed at `cleanup`.
+
+- **Decision review moved out of `yolo`** into `/staged-build:cleanup`, so it
+  starts from a lean context instead of inheriting the whole run's transcript.
+
+- **`pipeline.json` roles** are now `plan-architect`, `stage-runner`,
+  `stage-architect`, `implementer`, `verifier`. A project `.claude/pipeline.json`
+  naming the old roles will not route the new ones — update it.
+
+- **The verifier's payload is the contract *and* the stage diff.** The validator
+  previously received the contract alone; the verifier needs the diff to do the
+  reading half of its job. Everything else remains excluded: no `.detail.md`, no
+  implementer report, no decision log, no autonomy addendum.
+
+### Removed
+
+- The `plan-checker`, `reviewer`, `validator`, and `debugger` agents, and the
+  plan-check step and its revise→check cycle.
+
+### Migration
+
+Bump past a cached install (`claude plugin uninstall staged-build &&
+claude plugin install staged-build@staged-build`), and update any project
+`.claude/pipeline.json` to the five new role names. Features planned under 0.6.0
+keep working: `next` creates the missing `DECISIONS.md` and `SESSION_STATE.json`
+when it reaches a stage.
+
 ## [0.6.0] — 2026-09-02
 
 Branch and commit conventions for feature work.
