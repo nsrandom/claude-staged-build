@@ -22,6 +22,13 @@ actual types, actual call sites — rather than inventing a shape you expect to 
 Most bad stage specs come from an architect who assumed an interface instead of
 opening the file.
 
+If this stage integrates with an already-completed feature, your prompt contains
+that feature's `specs/<other-feature>/architecture.md` — its public API, CLI
+contracts, invariants, config keys, and test command, synthesised after it actually
+shipped. Treat it as authoritative and quote from it. It exists precisely so you do
+not have to reconstruct another feature's contracts by reading its source; do that
+only where the architecture file is silent on something you need.
+
 For stage N > 1, your prompt contains the **Summary and Changes sections** of every
 previous stage's report. Treat those as ground truth for what actually landed:
 exact property names, exact exports, exact types. `SPEC.md` is what someone
@@ -159,7 +166,10 @@ the implementer to choose between two readings of your spec. Then:
   shapes behaviour or a contract: strict versus lenient type validation, evaluation
   or short-circuit ordering, an addition to a public surface, fallback behaviour
   when something optional is absent.
-- Report it in your `Autonomous decisions` section so it reaches `DECISIONS.md`.
+- **Write it to disk**, in an `## Autonomous decisions` section at the end of
+  `NN-slug.detail.md`, numbered `D01`, `D02`, … in the same schema the implementer
+  uses. The stage-runner reads that section off disk and transcribes it into
+  `DECISIONS.md`; your return payload carries only the IDs.
 
 A **major** call is never yours to make quietly: scope or acceptance criteria,
 anything not cheaply reversible (data model, schema, migration, on-disk or wire
@@ -197,7 +207,8 @@ weaken an acceptance criterion to make the plan easier to satisfy.
 ## Report — compact payload only
 
 The specs are on disk. Do not repeat them here: no full contract, no task
-breakdown, no per-file plan. At most 250 tokens.
+breakdown, no per-file plan, no decision rationale. **At most 350 tokens**, in
+exactly this shape.
 
 ```yaml
 STATUS: SPECIFIED | SPLIT | CONFLICT
@@ -206,18 +217,16 @@ STAGE_FILES_WRITTEN:
   - specs/<feature>/stages/NN-slug.detail.md
 ACCEPTANCE_CRITERIA_COUNT: <N>
 VERIFICATION_COMMAND: "<command>"
-LARGE_STEPS:
-  - "Step 3 — <title>"
-DECISIONS_LOGGED:
-  - ID: D01
-    Tier: 1
-    Call: <short title>
-    File: path/to/file.ext:12
+LARGE_STEPS: ["Step 3 — <title>"]
+DECISION_IDS: [D01 (Tier 1), D02 (Tier 2)]
 SUMMARY: <1-4 sentences on the stage's shape and anything the implementer is
   likely to get wrong>
 ```
 
+`DECISION_IDS` carries references into the `## Autonomous decisions` section you
+wrote at the end of `NN-slug.detail.md` — never the calls, alternatives, or
+rationale themselves. If you took none, write `DECISION_IDS: []`.
+
 On `SPLIT`, list the sub-stages you created in `SUMMARY` and say why you split it.
 On `CONFLICT`, say in `SUMMARY` exactly what contradicts the codebase and what the
-plan would need to change. If you took no autonomous decisions, write
-`DECISIONS_LOGGED: []`.
+plan would need to change.

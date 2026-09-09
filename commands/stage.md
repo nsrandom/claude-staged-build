@@ -24,6 +24,7 @@ Requested: `$ARGUMENTS`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
 - Scratchpad contents: !`ls -1 specs/*/scratchpad 2>/dev/null || echo "(none)"`
+- Completed feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
 
 ### Plan state
 
@@ -87,18 +88,38 @@ Agent names are scoped to this plugin: `staged-build:plan-architect`,
 
 ```
 specs/<feature>/
-  SPEC.md                    <- plan-architect: goal, context, approach, stages, non-goals
-  STATE.md                   <- plan-architect: the stage table and the branch binding
-  DECISIONS.md               <- decisions taken without asking, with tiers
-  SESSION_STATE.json         <- runtime state: test command, runtime, shortcuts
-  scratchpad/                <- one-off throwaway verification code (gitignored)
-  stages/NN-slug.md          <- stage-architect: the acceptance contract
-  stages/NN-slug.detail.md   <- stage-architect: the implementation plan
-  stages/NN-slug.report.md   <- stage-runner: evidence and what actually landed
+  architecture.md                 <- cleanup: the permanent system reference for the finished feature
+  SPEC.md                         <- plan-architect: goal, context, approach, stages, non-goals
+  STATE.md                        <- plan-architect: the stage table and the branch binding
+  DECISIONS.md                    <- decisions taken without asking, with tiers
+  SESSION_STATE.json              <- runtime state: test command, runtime, shortcuts
+  scratchpad/                     <- one-off throwaway verification code (gitignored)
+  stages/NN-slug.md               <- stage-architect: the acceptance contract
+  stages/NN-slug.detail.md        <- stage-architect: the implementation plan
+  stages/NN-slug.wip.md           <- implementer: relay checkpoint, when one was needed
+  stages/NN-slug.report.md        <- stage-runner: evidence and what actually landed
+  stages/NN-slug.verification.log <- verifier: the raw command output, kept off every context
 ```
 
 Resolve `<feature>` from the listing above. If exactly one feature exists, use it.
 If several exist and the user did not name one, ask which. Never guess.
+
+## `architecture.md` is the ground truth for a finished feature
+
+A feature that has been through `/staged-build:cleanup` has an
+`architecture.md`: entrypoints, module map, public API and CLI contracts,
+invariants, config keys, and the test command — synthesised after the code actually
+landed, in about a page.
+
+**When this feature's work touches an already-completed one, read that file and
+pass it down verbatim** — to the stage-architect, and through the stage-runner to
+the implementer. Do not send an agent to rediscover another feature's contracts by
+reading its source, and do not paste its stage reports instead. `SPEC.md` was
+written before anything was built and has drifted; the reports are the truth in
+fifteen fragments; `architecture.md` is the truth in one.
+
+The same applies to maintenance work on a feature that already has one: it is the
+first thing to read and usually the only thing needed.
 
 ## Branch policy
 
@@ -242,8 +263,14 @@ Take **one** stage from pending to done. One. Never begin a second.
    interface that stage 03 never built. Keep it to a few hundred tokens — summaries
    and change lists only, never whole reports.
 
+   Where the stage integrates with an already-completed feature, add the full text
+   of that feature's `specs/<other-feature>/architecture.md`.
+
    It writes `NN-slug.md` and `NN-slug.detail.md` to disk and returns a compact
-   payload.
+   payload of at most 350 tokens. Its `DECISION_IDS` are references into the
+   `## Autonomous decisions` section at the end of `NN-slug.detail.md`: read that
+   section off disk and append its entries to `DECISIONS.md`, numbered on from the
+   highest existing ID.
 
    - `STATUS: SPLIT` → stop and show the new stage list. The plan changed and the
      user should see it before work starts.
@@ -268,10 +295,16 @@ Take **one** stage from pending to done. One. Never begin a second.
      config
    - the full text of the approved `NN-slug.md` and `NN-slug.detail.md`
    - the prior stage reports' Summary and Changes sections
+   - the `architecture.md` of any completed feature this stage integrates with
 
    It records the stage base, runs `implementer` ↔ `verifier` with a budget of 2
-   fix cycles, appends decisions to `DECISIONS.md`, commits on
-   `VERDICT: PASS`, writes `NN-slug.report.md`, and returns at most 1000 tokens.
+   fix cycles, appends decisions to `DECISIONS.md`, commits on `VERDICT: PASS`,
+   writes `NN-slug.report.md`, and returns at most 800 tokens.
+
+   If the implementer hits its 25-turn budget it returns `STATUS: RELAY_REQUIRED`,
+   and the runner hands the stage to a fresh implementer carrying only the contract
+   and the WIP checkpoint. That happens entirely inside the runner — up to two
+   relays — and reaches you only as a relay count in its summary.
 
    Do not re-run the verifier yourself, do not read the diff to form your own view,
    and do not ask the runner to try again after it halts.
@@ -292,9 +325,11 @@ Take **one** stage from pending to done. One. Never begin a second.
    the time and tokens went.
 
 10. **When every row is `done`**, tell the user the feature is complete and point
-    them at `/staged-build:cleanup` to review the decisions taken along the way and
-    clear the scratchpad, and at `/staged-build:analyze-tokens` for the efficiency
-    report.
+    them at `/staged-build:cleanup` — which reviews the decisions taken along the
+    way, clears the scratchpad, and writes `specs/<feature>/architecture.md`, the
+    permanent reference later features and maintenance sessions read instead of
+    re-deriving this one from source — and at `/staged-build:analyze-tokens` for
+    the efficiency report.
 
 ## `status`
 
@@ -307,6 +342,8 @@ Show the STATE.md table above, then:
 - a decision summary from `DECISIONS.md`: total, how many Tier 1 and Tier 2, and
   how many are unconfirmed, confirmed, rejected, deferred, or modified,
 - whether `specs/<feature>/scratchpad/` exists and what is in it,
+- whether `specs/<feature>/architecture.md` exists — and, if every row is `done`
+  and it does not, that `/staged-build:cleanup` is what writes it,
 - the summary section of the most recent `stages/*.report.md`.
 
 Change nothing.
@@ -326,7 +363,8 @@ Change nothing.
      **Do not delete the branch and do not create a replacement.** The branch
      carries every earlier stage of the feature; deleting it throws away work that
      `redo` was never asked to touch. The `Branch:` line in STATE.md stays as it is.
-3. Set the row back to `pending` in STATE.md and delete its `.report.md`.
+3. Set the row back to `pending` in STATE.md and delete its `.report.md`, along
+   with any `.wip.md` checkpoint and `.verification.log` it left behind.
 4. Remove the decision entries that stage logged from `DECISIONS.md`, or mark them
    `rejected` with a note saying the stage was redone.
 5. Run `next`.

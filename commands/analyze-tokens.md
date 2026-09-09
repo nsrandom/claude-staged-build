@@ -49,12 +49,24 @@ Your job is to explain the numbers, not to regenerate them.
      run.
    - **`retry-budget`** — the 2-fix-cycle budget was exceeded, which should have
      halted the stage.
-   - **`return-payload`** — a subagent returned more than its budget. Point at the
-     role and say the evidence belongs in the stage report on disk.
+   - **`return-payload`** — a subagent returned more than the budget for its role
+     (implementer 350, stage-architect 350, verifier 300, stage-runner 800,
+     plan-architect 800). Point at the role and say where the evidence belonged
+     instead: the stage report, the detail file, or the verification log.
+   - **`turn-budget`** — an implementer ran past its 25-turn ceiling instead of
+     writing a WIP checkpoint and returning `RELAY_REQUIRED`. A long implementer
+     session is quadratic, so this is usually the largest single number in the run.
    - **`retry-loop`, `latency`, `runaway-turns`** — where the time went, and what
-     tool the agent was thrashing on.
+     tool the agent was thrashing on. `retry-loop` counts fix cycles and relays
+     together; the stage report separates them.
 
-4. **Name the one change worth making.** Not a list of everything that could be
+4. **Say whether the feature has an `architecture.md`.** The report's
+   **Architectures** line lists every `specs/*/architecture.md` on disk. If this
+   feature is complete and has none, point the user at `/staged-build:cleanup`,
+   which writes it: without one, the next feature to touch this code pays for
+   rediscovering it.
+
+5. **Name the one change worth making.** Not a list of everything that could be
    tuned: the single heaviest role or stage, and what would actually reduce it —
    a routing change in `pipeline.json`, a stage that should have been split, a
    prompt passing more context than a role needs.

@@ -5,6 +5,104 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-09-08
+
+Cuts the pipeline's context amplification, and gives a finished feature a single
+permanent reference instead of twenty fragments. Ports the two most recent updates
+from the Gemini counterpart
+([nsrandom/gemini-staged-build](https://github.com/nsrandom/gemini-staged-build)).
+
+Telemetry from two production runs on the Gemini side — 64.5M tokens across 11
+stages, and 147.0M across 20 — put four structural costs above 70% of the total
+burn: implementers running to 86 turns in one conversation, payload limits that
+contradicted each other across files, root orchestrators accumulating 139 turns of
+cross-stage history, and downstream work re-deriving finished features from source
+because nothing on disk described them.
+
+### Added
+
+- **Implementer turn budget and the relay protocol.** The `implementer` has 25
+  turns, with 30 as a hard ceiling. At turn 20 it audits itself, and if it is
+  repeating edit → test → same-failure cycles it writes
+  `specs/<feature>/stages/NN-slug.wip.md` — criteria already passing, files
+  modified, the specific thing it is stuck on and what it has ruled out, planned
+  next steps — and returns `STATUS: RELAY_REQUIRED`.
+
+  The `stage-runner` treats that as a normal outcome: it ends that session and
+  invokes a **fresh** `implementer` holding only the contract, the checkpoint, and
+  the workspace on disk. The relay starts at a few thousand tokens rather than
+  inheriting a hundred thousand of stale test scrollback. At most 2 relays per
+  stage; a third returns `STATUS: HALTED`, because a stage needing four sessions is
+  mis-specified rather than unlucky. The 2 fix-cycle budget is per stage and is not
+  reset by a relay.
+
+- **`specs/<feature>/architecture.md`.** At the end of `/staged-build:cleanup` —
+  after the Tier 1 batch, the Tier 2 walkthroughs, any remediation stage, and the
+  scratchpad deletion — the feature gets one permanent system reference, committed
+  with the rest: executive summary and entrypoints; module and directory map;
+  public API, CLI contracts, and JSON schemas; key invariants and data flow; an
+  exhaustive table of configuration keys and named constants with their `file:line`;
+  and the authoritative test command and fixtures. 1,000–1,500 tokens.
+
+  It is synthesised in a single pass from metadata already verified on disk —
+  `DECISIONS.md`, the `Summary` and `Changes` sections of the stage reports, and
+  `SESSION_STATE.json` — and explicitly **not** by re-reading source files, which
+  would make documenting the feature cost as much as building it.
+
+  `/staged-build:stage`, `/staged-build:yolo`, and `/staged-build:cleanup` all
+  list the `architecture.md` files that exist, and pass the relevant one down
+  verbatim to the `stage-architect` and `implementer` when a stage integrates with
+  an already-completed feature. The `plan-architect` reads them before searching
+  the codebase, and `analyze_tokens.py` reports which exist and flags a completed
+  feature that has none.
+
+- **`specs/<feature>/stages/NN-slug.verification.log`.** The `verifier` now
+  redirects every command it runs into this file — it has no Write tool, so it uses
+  the shell it already has, appending rather than truncating so a fix cycle's
+  re-run sits under the first. Its return message carries a per-command exit-code
+  line, the criteria checklist, its findings, and the verdict.
+
+- **`turn-budget` finding** in `analyze_tokens.py`, for an implementer that ran past
+  25 turns instead of checkpointing and relaying.
+
+### Changed
+
+- **Return budgets are role-specific, and consistent everywhere.** The plugin
+  previously stated 250, 1000, and "no budget" in different files. Now, in the agent
+  files, both orchestrator commands, this changelog, the README, and
+  `scripts/analyze_tokens.py`:
+
+  | Role | Budget |
+  |---|---|
+  | `implementer` | ≤350 tokens |
+  | `stage-architect` | ≤350 tokens |
+  | `verifier` | ≤300 tokens |
+  | `stage-runner` | ≤800 tokens |
+  | `plan-architect` | ≤800 tokens |
+
+- **Decision rationale left the return payloads.** `implementer` and
+  `stage-architect` now return `DECISION_IDS: [D01 (Tier 1)]` — references only.
+  The full entries (the call, the alternatives, the tradeoffs, the `Change it here`
+  line) go to `NN-slug.report.md` and `NN-slug.detail.md` respectively, and the
+  `stage-runner` reads them off disk to transcribe into `DECISIONS.md`, renumbering
+  across the feature. `DECISIONS_LOGGED` is gone.
+
+- **`yolo` resets its context at every stage boundary.** On `STATUS: PASS` the root
+  orchestrator drops the finished stage's material — delegation prompt, pasted file
+  contents, runner summary — and reloads from exactly four files: `STATE.md`,
+  `DECISIONS.md`, `SESSION_STATE.json`, and the previous stage reports' Summary and
+  Changes sections, plus any relevant `architecture.md`. Carrying a completed
+  stage's history forward is prohibited: it is what turned a long run into a
+  139-turn, ~10M-token root session. If a run grows long anyway, it stops at a stage
+  boundary and asks for a `/clear` and a re-run, which resumes from `STATE.md`.
+
+- **`retry-loop` and `retry-budget` are relay-aware.** Implementer re-entries are
+  now reported as fix cycles or relays rather than assumed to be fix cycles, and the
+  critical threshold is 5 invocations (one initial, at most two relays, at most two
+  fix cycles).
+
+- **`redo`** also deletes the stage's `.wip.md` and `.verification.log`.
+
 ## [1.0.0] — 2026-09-06
 
 Restructures the pipeline around an ephemeral per-stage sub-orchestrator, aligning

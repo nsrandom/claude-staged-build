@@ -44,10 +44,9 @@ judgment is not yours.
 ```
 
 The orchestrator would pass it the same payload the verifier gets — the stage
-contract and the diff, and nothing else — wrapped in the verifier's own
-instructions, and would
-read `VERDICT: PASS` / `VERDICT: FAIL` out of the returned text exactly as it does
-now.
+contract, the diff, and the path of `NN-slug.verification.log`, and nothing else —
+wrapped in the verifier's own instructions, and would read `VERDICT: PASS` /
+`VERDICT: FAIL` out of the returned text exactly as it does now.
 
 ## What it costs you
 

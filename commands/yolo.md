@@ -23,6 +23,7 @@ Requested: `$ARGUMENTS`
 - Existing git branches: !`git branch --format='%(refname:short)' 2>/dev/null | tr '\n' ' ' || echo "(n/a)"`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
+- Completed feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
 
 ### Plan state
 
@@ -53,10 +54,15 @@ there is no user watching to catch you waving a stage through.
 
 **Stay small.** Each stage runs inside an ephemeral `staged-build:stage-runner`
 that reads the plan, drives `stage-architect`, `implementer`, and `verifier`,
-commits, writes the report to disk, and hands you back at most 1000 tokens. Test
+commits, writes the report to disk, and hands you back at most 800 tokens. Test
 transcripts, diffs, and fix cycles die with it. A twenty-stage run should leave you
 holding twenty short summaries, not twenty build logs — that is what makes the run
 able to reach stage 20 at all.
+
+And even twenty short summaries are twenty things re-read on every turn, which is
+why **you reset between stages** — see *Reset your context at every stage boundary*
+below. It is the difference between a run that costs a few hundred thousand tokens
+and one that costs ten million.
 
 ## Delegation rules
 
@@ -84,15 +90,25 @@ Agent names are scoped to this plugin: `staged-build:plan-architect`,
 
 ```
 specs/<feature>/
-  SPEC.md                    <- plan-architect: goal, context, approach, stages, non-goals
-  STATE.md                   <- plan-architect: the stage table and the branch binding
-  DECISIONS.md               <- every decision taken without asking, with tiers
-  SESSION_STATE.json         <- runtime state: test command, runtime, shortcuts
-  scratchpad/                <- one-off throwaway verification code (gitignored)
-  stages/NN-slug.md          <- stage-architect: the acceptance contract
-  stages/NN-slug.detail.md   <- stage-architect: the implementation plan
-  stages/NN-slug.report.md   <- stage-runner: evidence and what actually landed
+  architecture.md                 <- cleanup: the permanent system reference for the finished feature
+  SPEC.md                         <- plan-architect: goal, context, approach, stages, non-goals
+  STATE.md                        <- plan-architect: the stage table and the branch binding
+  DECISIONS.md                    <- every decision taken without asking, with tiers
+  SESSION_STATE.json              <- runtime state: test command, runtime, shortcuts
+  scratchpad/                     <- one-off throwaway verification code (gitignored)
+  stages/NN-slug.md               <- stage-architect: the acceptance contract
+  stages/NN-slug.detail.md        <- stage-architect: the implementation plan
+  stages/NN-slug.wip.md           <- implementer: relay checkpoint, when one was needed
+  stages/NN-slug.report.md        <- stage-runner: evidence and what actually landed
+  stages/NN-slug.verification.log <- verifier: the raw command output, kept off every context
 ```
+
+Where a stage integrates with an already-completed feature, that feature's
+`specs/<other-feature>/architecture.md` is the compact ground truth for its
+entrypoints, public API, invariants, and config keys. Read it and pass it down
+verbatim to the stage-runner rather than letting a subagent go and rediscover the
+same contracts by reading source. `SPEC.md` predates the code; the stage reports
+are the truth in fifteen fragments; `architecture.md` is the truth in one.
 
 Resolve `<feature>` from the listing above. If exactly one feature exists, use it.
 If several exist and the user did not name one, ask which. Never guess.
@@ -137,6 +153,12 @@ Stop the run, explain where it stopped, and ask. Do not proceed on an assumption
 
   Do not spend an extra cycle, re-prompt a subagent to try harder, or fix it
   yourself. Report it and stop.
+
+  A **relay** is not on that list. When an implementer hits its 25-turn budget it
+  writes a WIP checkpoint and returns `STATUS: RELAY_REQUIRED`, and the runner
+  hands the stage to a fresh implementer — up to twice — without stopping. It
+  reaches you only as a relay count in the runner's summary. A third relay is a
+  `HALTED`, and that is major like any other.
 
 ## Minor — decide, log, and keep going
 
@@ -274,7 +296,8 @@ into the run's decision log:
 ```
 ## Autonomous decisions
 
-- **The call:** <what was genuinely undecided>
+- **D01 — <short title>**
+  **The call:** <what was genuinely undecided>
   **Tier:** 1 | 2
   **Decision:** <what you chose>
   **Instead of:** <the alternatives>
@@ -293,6 +316,52 @@ contract and the diff and nothing else — the `stage-runner` enforces this, and
 do not undercut it by passing extra context down. If the verifier flags a decision
 that was logged, that is a real finding; it goes back to the implementer like any
 other, and is not excused because it is in the log.
+
+---
+
+# Reset your context at every stage boundary
+
+This is the single most important economy in an unattended run, and the one place
+where doing nothing is expensive. Your conversation is re-read on every turn, so
+carrying stage 03's history into stage 12 means paying for stage 03 nine more
+times. A root session that never resets accumulates quadratically: measured runs
+have reached 139 turns and ~10M tokens on the root alone, almost all of it stages
+that finished hours earlier.
+
+**So between stages, drop everything from the stage that just finished.** The
+moment you mark a row `done`, the material from that stage — the runner's summary,
+the delegation prompt you built, the file contents you pasted into it, the todo
+churn — has done its job. Nothing you need from it lives only in your context;
+every part of it that matters is on disk.
+
+**Reload lean.** At the start of each stage, rebuild what you need from exactly
+four things, read fresh:
+
+- `specs/<feature>/SESSION_STATE.json`
+- `specs/<feature>/STATE.md`
+- `specs/<feature>/DECISIONS.md`
+- the **Summary and Changes** sections of the previous stages' `NN-slug.report.md`
+  — the sections themselves, not the whole reports
+
+Plus the `architecture.md` of any completed feature this stage integrates with.
+That is the entire state of the run. If something you think you need is not in one
+of those files, the right fix is to write it to disk, not to keep the transcript.
+
+**Never carry forward:** a completed stage's delegation prompt, the full text of
+its `NN-slug.md` or `.detail.md`, any verifier findings, any implementer payload,
+any command output. Re-read a stage file from disk on the rare occasion you need it
+again; do not scroll back for it.
+
+Read the four files fresh at each boundary rather than quoting your own earlier
+reading of them. They change as the run proceeds — `STATE.md` and `DECISIONS.md`
+change every stage — and a stale copy in your context is both wrong and expensive.
+
+If the session has nonetheless grown long — many stages in, or a stage that needed
+relays and fix cycles — **say so and stop at a stage boundary**, telling the user
+to `/clear` and run `/staged-build:yolo` again. The run resumes from `STATE.md`
+with nothing carried over, because every artifact it needs is on disk. Stopping
+cleanly between stages costs one command; running to 100+ turns costs the rest of
+the plan.
 
 ---
 
@@ -401,15 +470,19 @@ reset it — the user needs to see what actually happened.
       - for stage N > 1, the **Summary and Changes sections** of every previous
         `stages/*.report.md`, with raw test logs stripped — a few hundred tokens,
         never whole reports
+      - the `architecture.md` of any completed feature this stage integrates with
       - the unattended addendum above, verbatim
 
       It specifies the stage, implements it, verifies it independently, self-heals
-      within a budget of 2 fix cycles, appends decisions to `DECISIONS.md`, commits
-      on `VERDICT: PASS`, writes the report to disk, and returns a compact summary.
+      within a budget of 2 fix cycles, relays a stuck implementer to a fresh one via
+      its WIP checkpoint (at most twice), appends decisions to `DECISIONS.md`,
+      commits on `VERDICT: PASS`, writes the report to disk, and returns at most
+      800 tokens.
 
    d. **On `STATUS: PASS`** → mark the row `done` in STATE.md, tick the todo, print
-      one line (stage passed, its commit, decisions logged, next stage), and **go
-      straight into the next stage.**
+      one line (stage passed, its commit, decisions logged, next stage), **drop
+      that stage's material as described above**, and **go straight into the next
+      stage** — re-reading the four state files rather than working from memory.
 
       **This is the one place `yolo` deliberately contradicts `next`: it
       auto-continues.** Do not stop between stages, do not ask whether to carry on,
@@ -425,18 +498,23 @@ reset it — the user needs to see what actually happened.
       blocked rather than running it.
 
 3. **When no stage is pending**, the implementation is done but the run is not: the
-   decisions taken along the way are still unconfirmed and the scratchpad may still
-   be there. Report the run (below), then tell the user to run
-   **`/staged-build:cleanup`**, which starts in a fresh, lean context — that reset
+   decisions taken along the way are still unconfirmed, the scratchpad may still be
+   there, and the feature has no `architecture.md` yet. Report the run (below), then
+   tell the user to run **`/staged-build:cleanup`**, which reviews the decisions,
+   clears the scratchpad, and writes `specs/<feature>/architecture.md` — the
+   permanent reference every later feature and maintenance session reads instead of
+   re-deriving this one from source. It starts in a fresh, lean context; that reset
    is the point, and it is why cleanup is a separate command rather than the last
    step of this one.
 
    Then add: *"To inspect token consumption, latency, and subagent efficiency, run
    `/staged-build:analyze-tokens`."*
 
-4. **Watchdog.** If any single stage takes more than about 15 minutes or needs more
-   than 2 fix cycles, say so mid-run and recommend `/staged-build:analyze-tokens`
-   to find the bottleneck before the rest of the plan runs into it.
+4. **Watchdog.** If any single stage takes more than about 15 minutes, needs more
+   than 2 fix cycles, or needed a relay, say so mid-run and recommend
+   `/staged-build:analyze-tokens` to find the bottleneck before the rest of the
+   plan runs into it. A relay usually means the stage is larger than it looked,
+   which is worth knowing before the next four stages assume otherwise.
 
 ---
 
@@ -446,7 +524,8 @@ Keep TodoWrite current for the whole run — it is the only view the user has in
 unattended pipeline.
 
 Between stages, one line is enough: the stage that passed, its commit, the
-decisions it logged, the stage starting next.
+decisions it logged, its fix-cycle and relay counts if either was non-zero, and the
+stage starting next.
 
 Report verdicts as the subagents gave them. Never upgrade a FAIL to a pass, never
 soften a Critical finding, and never claim a stage is done when the verifier did
@@ -460,6 +539,7 @@ what state the tree is in (committed through stage NN, plus whatever is
 uncommitted). Then stop. Do not offer to work around it.
 
 **When the run finishes**, give: the stages completed and their commits, the branch
-they are on, the decision count by tier, anything the verifier flagged and was
-accepted as non-blocking, the fact that nothing was pushed, and the two follow-up
-commands.
+they are on, the decision count by tier, how many stages needed a relay or a fix
+cycle, anything the verifier flagged and was accepted as non-blocking, the fact
+that nothing was pushed, and the two follow-up commands — noting that
+`/staged-build:cleanup` is also what writes `specs/<feature>/architecture.md`.

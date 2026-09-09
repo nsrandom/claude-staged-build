@@ -1,5 +1,5 @@
 ---
-description: Review the decisions taken without asking, then run a cleanup stage for whatever you reject and to clear the scratchpad.
+description: Review the decisions taken without asking, run a cleanup stage for whatever you reject and to clear the scratchpad, then write the feature's permanent architecture reference.
 argument-hint: (nothing - use the only feature) | --feature <name>
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, TodoWrite, AskUserQuestion
 model: opus
@@ -37,6 +37,10 @@ user whether they agree with a decision.
 
 !`cat specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
 
+### Completed feature architectures
+
+!`ls -1 specs/*/architecture.md 2>/dev/null || echo "(none)"`
+
 ### Scratchpad
 
 !`find specs/*/scratchpad -type f 2>/dev/null | head -50 || echo "(none)"`
@@ -60,7 +64,9 @@ features exist and none was named, ask which. Never guess.
 through `staged-build:stage-runner` like every other stage.
 
 If `DECISIONS.md` has no `unconfirmed` entries and there is no `scratchpad/`
-directory, say so and stop — there is nothing to clean up.
+directory, say so — there is nothing to review and nothing to remove. Skip to
+section 6 rather than stopping: the feature still needs its architecture reference
+if it does not have one yet.
 
 ---
 
@@ -139,7 +145,7 @@ A cleanup stage is needed if **either**:
 
 If neither is true, say every decision is confirmed and nothing is left to remove,
 commit the updated `DECISIONS.md` with a `<feature>-stage-NN: ` prefixed message,
-and stop.
+and go to section 6.
 
 # 5. Run the cleanup stage
 
@@ -186,6 +192,96 @@ and stop.
    On `HALTED` or `REPLANNED`, stop and report it exactly as the other commands do:
    which step, the blocker in the subagent's own words, and the state of the tree.
 
+# 6. Write the feature's architecture reference
+
+The feature is now finished, and this is the last thing it owes anyone: a single
+permanent reference to what actually landed. **Write
+`specs/<feature>/architecture.md`** before you report.
+
+It is the answer to a real cost. `SPEC.md` was written before a line of code
+existed and has drifted; the stage reports are the truth but they are the truth in
+ten or twenty fragments, each describing one slice. So the next agent that touches
+this feature — a downstream feature integrating with it, or a maintenance task six
+weeks from now — has nowhere to look, and pays for that by reading dozens of source
+files to rediscover what a page would have told it.
+
+## Synthesise it, do not re-derive it
+
+**Do not go and read the source files.** Everything you need has already been
+verified on disk by someone who ran it, and re-reading the implementation to
+document it would make this step the token sink it exists to prevent. Build the
+file from exactly three inputs:
+
+- **`specs/<feature>/DECISIONS.md`** — the confirmed invariants, named constants,
+  and config keys, each with the `Change it here: file:line` that holds it. Use the
+  post-review status: a `rejected` or `modified` decision is documented as it ended
+  up after remediation, never as it was first taken.
+- **The `Summary` and `Changes` sections of every `specs/<feature>/stages/*.report.md`**
+  — what each stage landed, with exact names, exports, and types. These were
+  written after verification passed, so they describe code that was observed to
+  work.
+- **`specs/<feature>/SESSION_STATE.json`** — the runtime, the test command, and the
+  environment facts.
+
+Read a source file only to settle a contradiction between two of those, and say in
+the file that you did.
+
+## The schema
+
+Six sections, in this order, and **1,000 to 1,500 tokens in total.** It is a cheat
+sheet, not a manual: exhaustive about names, contracts, and constants, and terse
+about everything else. If it does not fit, cut prose, never contracts.
+
+```markdown
+# <feature> — architecture
+
+Generated at cleanup from DECISIONS.md, the stage reports, and SESSION_STATE.json.
+This is the authoritative reference for what this feature is. SPEC.md is what was
+predicted before it was built.
+
+## 1. Executive summary and entrypoints
+<one paragraph: what this feature does, and the primary interfaces through which
+anything else reaches it — the module, the CLI command, the endpoint, the export>
+
+## 2. Module and directory map
+- path/to/module.ext — <one line: what this file is responsible for>
+
+## 3. Public API, CLI contracts, and JSON schemas
+- `functionName(arg: Type, ...) -> ReturnType` — <what it does; what it raises>
+- `cmd <sub> [--flag <value>]` — <what it does; exit codes>
+- `{ "field": "type" }` — <the shape, and where it is read or written>
+
+## 4. Key invariants and data flow
+- <the verified pipeline order, isolation boundary, or constraint — and what
+  breaks if it is violated>
+
+## 5. Configuration keys and defaults
+| Key | Default | Where it lives | Notes |
+|---|---|---|---|
+| `MAX_FETCH_ATTEMPTS` | `3` | `src/net/fetch.ts:12` | from D07 |
+
+## 6. Verification and test suite
+- Test command: `<the authoritative runner>`
+- Runtime: `<interpreter or toolchain>`
+- Key fixtures: `<paths>`
+```
+
+Section 5 is exhaustive: every environment variable, config parameter, and named
+constant that a decision landed as "one named place to change" belongs in it, with
+its `file:line`. That table is the single highest-value thing in the file, because
+it is what a future agent would otherwise grep the whole tree for.
+
+## Then commit it
+
+`git add specs/<feature>/architecture.md` and commit with the usual
+`<feature>-stage-NN: ` prefix — or fold it into the cleanup stage's commit if you
+have not committed yet. If one already exists from an earlier cleanup run, rewrite
+it from the current inputs rather than appending to it.
+
+Tell the user, in one line, that future features and maintenance sessions should
+read `specs/<feature>/architecture.md` as the authoritative source for this
+feature, instead of re-reading its stage reports or searching its source.
+
 ---
 
 # Reporting
@@ -195,6 +291,7 @@ Close with:
 - how many decisions were confirmed, rejected, modified, and remediated, by tier;
 - whether the scratchpad is gone;
 - the cleanup commit, if there was one;
+- that `specs/<feature>/architecture.md` was written, linked, and what it is for;
 - *"Feature complete. To inspect token consumption, latency, and subagent
   efficiency, run `/staged-build:analyze-tokens`."*
 

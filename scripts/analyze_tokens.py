@@ -31,25 +31,37 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 # A subagent that returns more than its budget defeats the point of running it in
-# an isolated context, so the report calls that out by role.
+# an isolated context, so the report calls that out by role. Each number is the
+# contract stated in that role's own agent file; they must stay in step.
 RETURN_BUDGETS = {
-    "implementer": 250,
-    "stage-architect": 250,
+    "implementer": 350,
+    "stage-architect": 350,
     # The plan-architect's report carries the questions the user has to answer, so
     # it is legitimately larger; this only flags a genuinely bloated one.
     "plan-architect": 800,
-    "verifier": None,  # the verifier's evidence is the deliverable; no budget
-    "stage-runner": 1000,
+    # The verifier writes command output to NN-slug.verification.log and returns
+    # only a checklist, its findings, and the verdict.
+    "verifier": 300,
+    "stage-runner": 800,
 }
 
 # Heuristic markers for context that must never reach the verifier.
 VERIFIER_LEAK_MARKERS = [
     ("detail.md", "implementation plan (.detail.md)"),
+    ("wip.md", "relay checkpoint (.wip.md)"),
     ("## Autonomous decisions", "decision log / autonomy addendum"),
     ("Unattended run — how to handle", "unattended addendum"),
+    ("DECISION_IDS", "implementer return payload"),
     ("DECISIONS_LOGGED", "implementer return payload"),
     ("VERDICT: PASS", "a prior verdict"),
 ]
+
+# The implementer stops at 25 planner turns and relays via a WIP checkpoint rather
+# than thrashing; 30 is the hard ceiling for any role.
+TURN_BUDGETS = {"implementer": 25}
+
+# One initial implementer plus at most two relays, plus at most two fix cycles.
+MAX_IMPLEMENTER_INVOCATIONS = 5
 
 SLOW_AGENT_SECONDS = 15 * 60
 RUNAWAY_TURNS = 30
@@ -198,6 +210,22 @@ def read_decisions(repo: str, feature: str) -> dict:
         status = re.search(r"\*\*Status:\*\*\s*([^\n]+)", block)
         summary["by_status"][status.group(1).strip() if status else "unknown"] += 1
     return summary
+
+
+def find_architectures(repo: str, feature: str) -> dict:
+    """Locate the permanent architecture references cleanup leaves behind.
+
+    A completed feature gets specs/<feature>/architecture.md: its entrypoints,
+    public API, invariants, and config keys in about a page. Downstream features
+    read that instead of re-deriving the same facts from source, so the report says
+    which ones exist and whether this feature has written its own yet.
+    """
+    paths = sorted(
+        os.path.relpath(p, repo)
+        for p in glob.glob(os.path.join(repo, "specs", "*", "architecture.md"))
+    )
+    own = os.path.join("specs", feature, "architecture.md")
+    return {"completed_architectures": paths, "has_architecture": own in paths}
 
 
 # ------------------------------------------------------------------- transcript
@@ -453,9 +481,10 @@ def analyse(invocations, state):
                     "severity": "warning",
                     "role": inv.role,
                     "stage": inv.stage,
-                    "detail": "returned ~%d tokens against a %d-token budget; the "
-                    "verbose material belongs in the stage report on disk"
-                    % (inv.return_tokens, budget),
+                    "detail": "returned ~%d tokens against the %d-token budget for "
+                    "`%s`; the verbose material belongs on disk — the stage report, "
+                    "the detail file, or the verification log"
+                    % (inv.return_tokens, budget, inv.role),
                 }
             )
 
@@ -490,18 +519,21 @@ def analyse(invocations, state):
                     "severity": "warning",
                     "role": "implementer",
                     "stage": stage,
-                    "detail": "%d implementer invocations (%d fix cycle%s)"
-                    % (count, count - 1, "" if count == 2 else "s"),
+                    "detail": "%d implementer invocations (%d re-entr%s — fix cycles, "
+                    "relays, or both)"
+                    % (count, count - 1, "y" if count == 2 else "ies"),
                 }
             )
-        if count > 3:
+        if count > MAX_IMPLEMENTER_INVOCATIONS:
             findings.append(
                 {
                     "kind": "retry-budget",
                     "severity": "critical",
                     "role": "implementer",
                     "stage": stage,
-                    "detail": "%d invocations exceeds the 2 fix-cycle budget" % count,
+                    "detail": "%d invocations exceeds the ceiling of %d "
+                    "(1 initial + at most 2 relays + at most 2 fix cycles)"
+                    % (count, MAX_IMPLEMENTER_INVOCATIONS),
                 }
             )
 
@@ -517,6 +549,19 @@ def analyse(invocations, state):
                     "role": inv.role,
                     "stage": inv.stage,
                     "detail": "ran for %s" % fmt_duration(inv.duration),
+                }
+            )
+        turn_budget = TURN_BUDGETS.get(inv.role)
+        if turn_budget and turn_budget < inv.turns <= RUNAWAY_TURNS:
+            findings.append(
+                {
+                    "kind": "turn-budget",
+                    "severity": "warning",
+                    "role": inv.role,
+                    "stage": inv.stage,
+                    "detail": "%d turns against a %d-turn budget; it should have "
+                    "written a WIP checkpoint and returned RELAY_REQUIRED instead "
+                    "of running on" % (inv.turns, turn_budget),
                 }
             )
         if inv.turns > RUNAWAY_TURNS:
@@ -578,6 +623,13 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
         "- **Repository:** `%s`" % repo,
         "- **Transcripts:** `%s`" % root,
         "- **Branch:** %s" % (state.get("branch") or "(unknown)"),
+        "- **Architectures:** %s"
+        % (
+            ", ".join(
+                "`%s`" % p for p in result["architectures"]["completed_architectures"]
+            )
+            or "(none)"
+        ),
         "",
         "## Totals",
         "",
@@ -741,6 +793,7 @@ def build_json(feature, repo, state, decisions, invocations, result, root):
             "models": dict(bucket["models"].most_common()),
             "return_tokens": bucket["return_tokens"],
             "return_budget": RETURN_BUDGETS.get(role),
+            "turn_budget": TURN_BUDGETS.get(role),
         }
         for role, bucket in result["by_role"].items()
     }
@@ -751,6 +804,8 @@ def build_json(feature, repo, state, decisions, invocations, result, root):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": result["mode"],
         "branch": state.get("branch"),
+        "completed_architectures": result["architectures"]["completed_architectures"],
+        "has_architecture": result["architectures"]["has_architecture"],
         "stages": state.get("stages", []),
         "decisions": {
             "total": decisions["total"],
@@ -808,6 +863,13 @@ def print_summary(feature, result, invocations, out_md):
             "  heaviest: "
             + ", ".join("%s %s" % (r, fmt_tokens(b["tokens"])) for r, b in top)
         )
+    arch = result["architectures"]
+    print(
+        "  Architectures: %s"
+        % (", ".join(arch["completed_architectures"]) or "(none)")
+    )
+    if result["mode"] == "post-feature" and not arch["has_architecture"]:
+        print("    ! no architecture.md for this feature — run /staged-build:cleanup")
     print("  findings: %d critical, %d warning" % (len(criticals), len(warnings)))
     for finding in criticals[:3]:
         print("    ! %s (%s): %s" % (finding["kind"], finding["role"], finding["detail"]))
@@ -849,6 +911,7 @@ def main(argv=None):
         return 1
 
     result = analyse(invocations, state)
+    result["architectures"] = find_architectures(repo, feature)
 
     out_dir = args.out or os.path.join(repo, "specs", feature)
     os.makedirs(out_dir, exist_ok=True)

@@ -15,25 +15,39 @@ that are genuinely yours to make.
 | Role | Model | Tools | Does |
 |---|---|---|---|
 | `plan-architect` | opus | Read, Grep, Glob, Write, Edit, Bash | Designs the plan and writes it straight to `specs/<feature>/`. Asks rather than assumes. No code. |
-| `stage-runner` | sonnet | Read, Write, Edit, Bash, Grep, Glob, Agent | Ephemeral sub-orchestrator. Runs one stage's whole lifecycle in an isolated context and returns ≤1000 tokens. |
+| `stage-runner` | sonnet | Read, Write, Edit, Bash, Grep, Glob, Agent | Ephemeral sub-orchestrator. Runs one stage's whole lifecycle in an isolated context and returns ≤800 tokens. |
 | `stage-architect` | opus | Read, Grep, Glob, Write, Edit, Bash | Turns one stage into a precise, implementable spec on disk. Splits it if too large. No code. |
 | `implementer` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Implements exactly one stage, and self-heals when verification fails. |
 | `verifier` | sonnet | Read, Grep, Glob, Bash | Reads the diff against the contract *and* runs the thing. Never fixes. |
 
-Five roles, and the two structural ideas that make them work:
+Five roles, and the structural ideas that make them work:
 
 **The root orchestrator stays small.** It talks to you, owns the plan files, and
 delegates each stage whole to an ephemeral `stage-runner`. That runner drives
 `stage-architect`, `implementer`, and `verifier`, commits, writes the stage report
-to disk, and dies — handing back a summary of at most 1000 tokens. Test
+to disk, and dies — handing back a summary of at most 800 tokens. Test
 transcripts, diffs, and fix cycles never reach your conversation. That is what lets
-a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history.
+a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history. In
+`yolo` it goes further and resets between stages, reloading only `STATE.md`,
+`DECISIONS.md`, `SESSION_STATE.json`, and the previous report summaries, so a long
+run does not accumulate its own history quadratically.
 
-**Subagents write evidence to disk, not into the chat.** The `implementer` and
-`stage-architect` return a structured payload of ≤250 tokens and put the exhaustive
-material — line-by-line changes, real test output, per-file plans — in
-`specs/<feature>/stages/`. `/staged-build:analyze-tokens` audits whether they
-actually did.
+**Subagents write evidence to disk, not into the chat.** Every role has a return
+budget — `implementer` and `stage-architect` ≤350 tokens, `verifier` ≤300,
+`stage-runner` ≤800 — and the exhaustive material goes to
+`specs/<feature>/stages/`: line-by-line changes and decision rationale to
+`*.report.md`, per-file plans to `*.detail.md`, and raw command and test output to
+`*.verification.log`. Return payloads carry decision *IDs*, not decision write-ups.
+`/staged-build:analyze-tokens` audits, per role, whether they actually did.
+
+**A stuck implementer relays instead of thrashing.** An implementer has 25 turns.
+Its own transcript is re-read on every one of them, so ten rounds of edit-run-read
+pay for the first test log ten times. At turn 20 it audits itself, and if it is
+looping it writes `NN-slug.wip.md` — what passes, what is stuck, what it has ruled
+out — and returns `RELAY_REQUIRED`. The runner then starts a *fresh* implementer
+holding only the contract, that checkpoint, and the workspace on disk: a few
+thousand tokens instead of a hundred thousand, and usually the thing that gets it
+unstuck. Two relays per stage; a third means the stage is wrong, not the agent.
 
 **Planning happens at two altitudes.** The plan-architect works out *what* to build
 and *in what order*, and settles it with you. The stage-architect then works out
@@ -42,6 +56,16 @@ it have actually landed, informed by what the code really became rather than by
 what the plan predicted. For stage N > 1 it is given the Summary and Changes
 sections of every prior stage report as ground truth, which is what stops stage 05
 from being specified against an interface stage 03 never built.
+
+**A finished feature leaves one page, not twenty.** At the end of
+`/staged-build:cleanup`, the feature gets `specs/<feature>/architecture.md`:
+entrypoints, module map, public API and CLI contracts, invariants, config keys with
+their `file:line`, and the test command. It is synthesised from `DECISIONS.md`, the
+stage reports' Summary and Changes sections, and `SESSION_STATE.json` — never by
+re-reading the source, which would make the documentation step the token sink it
+exists to prevent. Later features and maintenance sessions read that one file
+instead of grepping the tree: `SPEC.md` predates the code and has drifted, and the
+stage reports are the truth in fifteen fragments.
 
 **The verifier is given the contract and the diff, and nothing else** — never the
 implementation plan, the implementer's report, or the decision log. It re-derives
@@ -148,7 +172,7 @@ Takes **one** stage from pending to done:
    — see [Branches](#branches))
 2. Marks the stage `in-progress`
 3. **stage-architect** writes the acceptance contract and the implementation plan
-   to disk, and returns a ≤250-token summary
+   to disk, and returns a ≤350-token summary
 4. **You verify the plan.** The orchestrator shows the criteria, the verification
    command, the files in scope, and the test plan, and asks before anything is
    built. Want changes? The stage-architect revises the files in place.
@@ -156,7 +180,9 @@ Takes **one** stage from pending to done:
    **implementer** implements → **verifier** reads the diff *and* runs it →
    `VERDICT: PASS` / `FAIL`
 6. On FAIL → the findings go straight back to the **implementer** to self-heal,
-   then re-verify (max 2 cycles)
+   then re-verify (max 2 cycles). If the implementer instead hits its 25-turn
+   budget, it checkpoints and the runner relays the stage to a fresh one (max 2
+   relays) — all of which happens inside the runner and reaches you as a count
 7. On PASS → commits the stage, writes `NN-slug.report.md`, and returns a short
    summary. The orchestrator marks it `done` and **stops**
 
@@ -209,7 +235,13 @@ resets the current stage's work off it rather than deleting it.
 
 Runs **every** pending stage, back to back, committing as it goes. Each stage goes
 to its own `stage-runner`, so the root orchestrator collects short summaries rather
-than twenty stages of build output.
+than twenty stages of build output — and it **resets between stages**, dropping the
+finished stage's material and reloading only `STATE.md`, `DECISIONS.md`,
+`SESSION_STATE.json`, and the previous report summaries. Everything it needs is on
+disk, so nothing is lost; what goes away is the per-turn cost of re-reading stage 3
+while running stage 12. If a run does grow long, it stops at a stage boundary and
+tells you to `/clear` and run `/staged-build:yolo` again, which resumes from
+`STATE.md` with a clean slate.
 
 **It decides small things itself.** Every judgement call a subagent hands back is
 triaged as major or minor. Minor is naming, placement, a default value, message
@@ -293,6 +325,10 @@ Then:
   normal pipeline — stage-architect, implementer, verifier, commit. The verifier
   confirms the remediations landed, the scratchpad is gone, and the tests still
   pass.
+- **`architecture.md`, last.** Once the remediation has landed and the scratchpad
+  is gone, it writes `specs/<feature>/architecture.md` from the decision log, the
+  stage reports, and `SESSION_STATE.json`, and commits it. That is the file every
+  later feature and maintenance session should read first.
 
 ### `/staged-build:analyze-tokens`
 
@@ -306,11 +342,17 @@ It also audits the pipeline's own invariants, and this is the part worth running
 - **`verifier-independence`** — did anything reach the verifier that shouldn't
   have? A stage whose verifier saw the implementation plan has a verdict worth less
   than it looks.
-- **`return-payload`** — did the implementer and stage-architect stay inside their
-  ≤250-token budgets, or did the evidence leak upward instead of going to disk?
-- **`retry-loop` / `retry-budget`** — how many fix cycles each stage really took.
+- **`return-payload`** — did each role stay inside its own budget (350 / 350 / 300
+  / 800), or did the evidence leak upward instead of going to disk?
+- **`turn-budget`** — did an implementer run past 25 turns instead of checkpointing
+  and relaying? This is usually the single largest number in an expensive run.
+- **`retry-loop` / `retry-budget`** — how many fix cycles and relays each stage
+  really took.
 - **`latency` / `runaway-turns`** — which agent ran long, and what tool it was
   thrashing on.
+
+It also reports which features have an `architecture.md`, and says so when a
+completed feature is missing one.
 
 Run it whenever a stage feels slow, not only at the end; `yolo` and `next` will
 suggest it themselves if a stage exceeds ~15 minutes or 2 fix cycles.
@@ -332,6 +374,7 @@ Plan state lives in `specs/`, in your project, one directory per feature:
 
 ```
 specs/<feature>/
+  architecture.md                # written by cleanup: the permanent system reference
   SPEC.md                        # goal, context, approach, stages, non-goals
   STATE.md                       # the stage table, and the feature's Branch: line
   DECISIONS.md                   # decisions taken without asking, with tiers
@@ -342,13 +385,26 @@ specs/<feature>/
   stages/
     01-slug.md                   # acceptance contract: criteria, verification, out-of-scope
     01-slug.detail.md            # implementation plan: signatures, edge cases, test plan
+    01-slug.wip.md               # relay checkpoint, if the implementer needed one
     01-slug.report.md            # evidence, and what actually landed
+    01-slug.verification.log     # the verifier's raw command output, kept off every context
 ```
 
 `SPEC.md`, `STATE.md`, `DECISIONS.md`, and `SESSION_STATE.json` are written by the
 plan-architect up front. Everything under `stages/` is written when that stage
 begins — so a stage spec reflects the code as it actually exists by then, not as
 the plan predicted it would.
+
+**`architecture.md` is the cure for the exploration tax.** It is written once, at
+the end of `cleanup`, from metadata already verified on disk — the decision log,
+the stage reports' Summary and Changes sections, and `SESSION_STATE.json`. About a
+page: entrypoints, module map, public API and CLI contracts, invariants and data
+flow, an exhaustive table of config keys and named constants with their `file:line`,
+and the test command. Point the next feature — or the next maintenance session — at
+that file instead of letting it rediscover the same facts across dozens of
+`Read` and `Grep` calls. `/staged-build:stage`, `/staged-build:yolo`, and
+`/staged-build:cleanup` all list the ones that exist, and pass the relevant one down
+to their subagents.
 
 **`SESSION_STATE.json` is the cure for environment amnesia.** The test command, the
 interpreter path, the flag your suite needs — recorded once, read by every later
