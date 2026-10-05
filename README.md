@@ -570,10 +570,12 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
   doing the work itself, and the root orchestrator runs the stage directly.
 - Plugin agents ignore `hooks`, `mcpServers`, and `permissionMode` frontmatter —
   this plugin does not use those fields.
-- Stages are sized for roughly 400 lines of diff, and steps within a stage are
-  marked `[large]` at roughly 150. A stage much larger than that is a planning bug;
-  the stage-architect splits it when `next` reaches it, and the pipeline stops so
-  you can see the new breakdown before any code is written.
+- Stages are sized for roughly 500 lines of diff, not counting tests, and steps
+  within a stage are marked `[large]` at roughly 150. The 500 is a soft guideline:
+  a stage is judged on whether its diff is one tightly coupled change, so a
+  cohesive stage may run over and an incoherent one is split well under it. When the
+  stage-architect does split one as `next` reaches it, the pipeline stops so you can
+  see the new breakdown before any code is written.
 - **`/staged-build:yolo` needs `Bash(git commit:*)` and `Bash(git add:*)`**, since
   it commits each stage rather than describing the commit for you. Without them the
   run stops on the first permission prompt, which defeats the point of running

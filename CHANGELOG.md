@@ -5,6 +5,18 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-10-05
+
+### Changed
+
+- **Stage size guideline is now ~500 lines of diff, excluding tests, and soft.**
+  It was a flat ~400 including tests. The `plan-architect` and `stage-architect`
+  now cut stages along the seams of the change — one concern, one reason to revert —
+  rather than at a line count. A stage that bundles unrelated work is split even
+  when small; a stage whose pieces only make sense together (an interface and its
+  consumers, a rename and its call sites) stays whole and says in its summary that
+  it runs over. The `[large]` step mark at ~150 lines is unchanged.
+
 ## [1.1.0] — 2026-09-08
 
 Cuts the pipeline's context amplification, and gives a finished feature a single

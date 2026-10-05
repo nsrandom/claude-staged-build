@@ -38,8 +38,21 @@ that is a conflict, not something to paper over.
 
 ## First: is this one stage or several?
 
-A stage must be implementable in one pass and reviewable in roughly 400 lines of
-diff. If this one is not, split it.
+A stage must be implementable in one pass and reviewable as a single coherent
+change. Aim for roughly 500 lines of diff or less, **not counting tests** — but that
+number is a soft guideline, and cohesion outranks it. Judge the stage by whether its
+diff is tightly coupled to one change, not by its line count:
+
+- **Split** when the stage bundles unrelated concerns, or when a part of it could
+  ship, be reviewed, and be reverted on its own. This applies even if it is well
+  under 500 lines.
+- **Do not split** merely to hit the number. If the pieces only make sense together
+  — a new interface and its sole consumers, a rename and every call site, a schema
+  and the code that reads it — splitting leaves a half-wired repo and a reviewer
+  who has to hold two diffs in their head. Keep it whole and say in `SUMMARY` that
+  it runs over and why.
+
+If it must be split, do so.
 
 Replace it with sub-stages `NN-a-slug`, `NN-b-slug`, … Each sub-stage must be
 independently shippable, ordered by dependency, and separately verifiable. Write a

@@ -160,7 +160,12 @@ Every stage you propose must satisfy all four:
 
 1. **Independently shippable.** The repo works at the end of it. No stage leaves a
    half-wired call site for the next one to finish.
-2. **Reviewable in roughly 400 lines of diff or less.**
+2. **Reviewable, and tightly coupled.** Aim for roughly 500 lines of diff or less,
+   not counting tests. That is a soft guideline: the real test is that the diff is
+   one coherent change a reviewer can hold in their head. Cut stages along the
+   seams of the change itself — one concern, one reason to revert — not at a line
+   count. A cohesive 650-line stage beats two 325-line halves that only make sense
+   together; a 300-line stage that mixes two unrelated changes should be split.
 3. **Verifiable.** There is an observable way to tell whether it worked. You do not
    have to write the command — the stage-architect does — but if you cannot
    describe how anyone would tell, the stage is not well formed.
