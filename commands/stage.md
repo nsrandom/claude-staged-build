@@ -25,6 +25,8 @@ Requested: `$ARGUMENTS`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
 - Scratchpad contents: !`ls -1 specs/*/scratchpad 2>/dev/null || echo "(none)"`
 - Feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
+- Handoff script: !`echo "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py"`
+- Context carried in from earlier in this session: !`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/context_check.py" 2>/dev/null || echo "unknown"`
 
 ### Plan state
 
@@ -34,9 +36,13 @@ Requested: `$ARGUMENTS`
 
 !`cat specs/*/SESSION_STATE.json 2>/dev/null || echo "(none yet)"`
 
-### Decision log
+### Decision counts
 
-!`cat specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+Counts only. The log itself stays on disk; see *What the root reads* below.
+
+- Decisions: !`grep -cE '^## D[0-9]+' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Tier 2: !`grep -cE '(\*\*Tier:\*\* 2|\(Tier 2)' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- By status: !`grep -hoE '(\*\*Status:\*\* |\(Tier [12], )[a-z]+' specs/*/DECISIONS.md 2>/dev/null | sed -E 's/.* //' | sort | uniq -c | tr -s ' \n' ' ' || echo "(none yet)"`
 
 ---
 
@@ -56,19 +62,44 @@ disk, never in this conversation. You should finish a stage having read a payloa
 of a few hundred tokens, not a build log. If you find yourself pasting a test run
 into your own context, something has been delegated wrongly.
 
+**Stage material never enters this conversation, not even on its way to a
+subagent.** You cannot remove anything from your own context once it is there —
+only the user's `/clear` can — so the only way to stay small is never to load it.
+Subagents load their own context from disk with `handoff.py`; you hand them the
+command, not the text.
+
+### What the root reads
+
+- `STATE.md`, and you edit it with targeted changes to one row or one line;
+- the subagents' return payloads;
+- in `next`, the `approval` bundle from `handoff.py`;
+- a specific section of a specific file, on demand, when the user asks about it.
+
+**Never** `SPEC.md`, `architecture.md`, a stage contract or detail file, a report
+body, `DECISIONS.md`, verifier output, or command output. `status` is the one
+exemption, and only for what it lists below.
+
 ## Delegation rules
 
 These are not optional. The pipeline is worthless if they are broken.
 
 **Subagents share no context with you or with each other.** Each one starts blank.
 It cannot see this conversation, the stage file, or what any earlier subagent said.
-Therefore every delegation prompt must contain, inline and verbatim:
+So a stage delegation gives it a way to load exactly what it needs, plus anything
+that exists only here:
 
-- The **full text** of the files the subagent needs — read them and paste them,
-  never a path, never a summary, never "as described above".
-- Any prior findings the subagent needs, quoted exactly as the earlier subagent
-  wrote them. Do not paraphrase a verifier's findings into your own words; you will
-  soften them.
+- **By path, through `handoff.py`.** The prompt names the `handoff.py` command the
+  subagent runs first — the script path from *Resolved context* above, with
+  `--feature`, `--stage`, `--role`, and one `--include <path>` per extra file. It
+  prints that role's bundle from disk. Never read those files to paste them.
+- **Inline and verbatim: whatever exists only in this conversation.** The user's
+  answers, the user's feedback on a plan, and any prior findings being relayed —
+  quoted exactly as written. Do not paraphrase a verifier's findings or the user's
+  words; you will soften them.
+
+**Every required path must exist before you delegate.** Run the same command with
+`--check` first; it prints `ok` or the missing files and nothing else. If a file is
+missing, stop and say so — do not delegate and let the subagent guess.
 
 **Pass the routing model on every invocation.** Look up the role in the routing
 config above and pass it as the Agent tool's `model` parameter. Never omit it.
@@ -116,10 +147,11 @@ finalises it.
 this feature's `architecture.md` plus the full report of the immediately previous
 stage, and nothing older.
 
-**When this feature's work touches an already-completed one, read that file and
-pass it down verbatim** — to the stage-architect, and through the stage-runner to
-the implementer. Do not send an agent to rediscover another feature's contracts by
-reading its source, and do not paste its stage reports instead. `SPEC.md` was
+**When this feature's work touches an already-completed one, pass that file down
+by path** — `--include specs/<other-feature>/architecture.md` on the handoff command
+— to the stage-architect, and through the stage-runner to the implementer. Do not
+send an agent to rediscover another feature's contracts by reading its source, and
+do not hand it that feature's stage reports instead. `SPEC.md` was
 written before anything was built and has drifted; the reports are the truth in
 fifteen fragments; `architecture.md` is the truth in one.
 
@@ -234,6 +266,20 @@ not a paraphrase in chat.
 
 Take **one** stage from pending to done. One. Never begin a second.
 
+0. **Check for a stale context.** Read the *Context carried in* line in *Resolved
+   context* above. If it starts with `large`, this conversation is still holding
+   earlier work — a previous stage, a planning session, something unrelated — and
+   every turn of this stage will re-send all of it. Before doing anything else,
+   tell the user, quoting the line, and ask with AskUserQuestion:
+
+   - **Stop so I can `/clear`** — stop here, changing nothing. After `/clear`,
+     `/staged-build:stage next` picks up from `STATE.md` exactly where it would
+     have now, because everything the stage needs is on disk.
+   - **Continue anyway** — carry on with step 1.
+
+   Ask once, and do not ask again later in this stage. On `fresh`, `small`, or
+   `unknown`, say nothing and go straight to step 1.
+
 1. **Pick the stage.** The first row in STATE.md that is not `done`. If it is
    `blocked`, stop and explain why it is blocked instead of running it.
 
@@ -257,30 +303,39 @@ Take **one** stage from pending to done. One. Never begin a second.
 
 4. **Mark `in-progress`** for that row in STATE.md.
 
-5. **Specify the stage.** Delegate to `staged-build:stage-architect`, passing the
-   full text of `SPEC.md`, the STATE.md row for this stage, and — for stage N > 1 —
-   the full text of `specs/<feature>/architecture.md` and the full text of the
-   **immediately previous** stage's `specs/<feature>/stages/*.report.md`. Do not
-   paste the Summary and Changes of every earlier report: `architecture.md` already
-   carries what they established, rewritten to match the code as it stands.
+5. **Specify the stage.** Delegate to `staged-build:stage-architect` with a prompt
+   that contains only:
 
-   Those two files are the ground truth for what actually landed: exact names,
-   exports, types, and the rules that hold. `SPEC.md` is what someone predicted
-   before any code existed. Passing both is what stops stage 05 from being
-   specified against an interface that stage 03 never built.
+   - the feature slug, and the stage number and title from STATE.md;
+   - the handoff command to run first:
 
-   If a feature started before the running `architecture.md` existed has none yet,
-   pass the Summary and Changes sections of every previous report instead, as
-   before; the stage-runner creates the file when this stage passes.
+     ```sh
+     python3 <handoff script> --feature <feature> --stage NN --role stage-architect [--include <path> ...]
+     ```
 
-   Where the stage integrates with an already-completed feature, add the full text
-   of that feature's `specs/<other-feature>/architecture.md`.
+     It prints `SPEC.md`, `STATE.md`, and `SESSION_STATE.json` in full, this
+     feature's `architecture.md`, and the full report of the **immediately
+     previous** stage. For the first stage those last two do not exist yet and the
+     script says so. A feature started before the running `architecture.md`
+     existed gets the Summary and Changes of every earlier report in its place;
+     the stage-runner creates the file when this stage passes.
+   - one `--include` for each completed feature this stage integrates with —
+     `specs/<other-feature>/architecture.md` — and for any investigation findings
+     file a stage before this one wrote for it to build on.
+
+   Run the command with `--check` first, as the delegation rules require.
+
+   `architecture.md` and the previous report are the ground truth for what
+   actually landed: exact names, exports, types, and the rules that hold.
+   `SPEC.md` is what someone predicted before any code existed. Handing over both
+   is what stops stage 05 from being specified against an interface that stage 03
+   never built.
 
    It writes `NN-slug.md` and `NN-slug.detail.md` to disk and returns a compact
-   payload of at most 350 tokens. Its `DECISION_IDS` are references into the
-   `## Autonomous decisions` section at the end of `NN-slug.detail.md`: read that
-   section off disk and append its entries to `DECISIONS.md`, numbered on from the
-   highest existing ID.
+   payload of at most 350 tokens: its decision IDs with their tiers, the titles of
+   its Tier 2 decisions, and any `INCLUDES` it found it needed — add those to every
+   later handoff command for this stage. Do not touch `DECISIONS.md`: the
+   stage-runner transcribes the architect's decisions when the stage passes.
 
    - `STATUS: SPLIT` → stop and show the new stage list. The plan changed and the
      user should see it before work starts.
@@ -288,30 +343,48 @@ Take **one** stage from pending to done. One. Never begin a second.
      architect's own words.
 
 6. **Verify the plan with the user.** This is the gate that replaces implementing
-   on trust. Link `NN-slug.md` and `NN-slug.detail.md`, and show inline: the
-   acceptance criteria, the verification command, the files expected to change, the
-   test-coverage plan, and the titles of any `[large]` steps.
+   on trust. Link `NN-slug.md` and `NN-slug.detail.md`, run
+
+   ```sh
+   python3 <handoff script> --feature <feature> --stage NN --role approval
+   ```
+
+   and show its output inline: the acceptance criteria, the verification command,
+   the files expected to change, the test-coverage plan, the titles of any
+   `[large]` steps, and the `## Autonomous decisions` section. That bundle is the
+   only part of the stage files you read.
 
    Ask whether to proceed or adjust. If the user wants changes, delegate a revision
-   pass to `staged-build:stage-architect` with their feedback quoted verbatim; it
-   edits both files in place. Show what changed and ask again. Continue until they
-   approve — or until they tell you to stop asking and proceed.
+   pass to `staged-build:stage-architect` by path, exactly as in step 5 — the same
+   handoff command with `--role stage-runner`, which adds the two stage files it is
+   revising — plus the user's feedback quoted verbatim. It edits both files in
+   place. Re-run the `approval` bundle, show what changed, and ask again. Continue
+   until they approve — or until they tell you to stop asking and proceed.
 
-7. **Run the stage.** Delegate to `staged-build:stage-runner` with:
+7. **Run the stage.** Delegate to `staged-build:stage-runner` with a prompt that
+   contains only:
 
    - `MODE: supervised`
    - the feature slug, stage number, title, and slug
-   - the full text of `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, and the routing
-     config
-   - the full text of the approved `NN-slug.md` and `NN-slug.detail.md`
-   - for stage N > 1, the same two files the stage-architect got: the full
-     `architecture.md` and the full report of the immediately previous stage
-   - the `architecture.md` of any completed feature this stage integrates with
+   - the routing config
+   - the handoff command to run first:
+
+     ```sh
+     python3 <handoff script> --feature <feature> --stage NN --role stage-runner [--include <path> ...]
+     ```
+
+     — the stage-architect's bundle plus the approved `NN-slug.md` and
+     `NN-slug.detail.md`, with the same `--include` paths the architect got and
+     any it reported back
+   - any user answer this stage still depends on, quoted verbatim
+
+   Run the command with `--check` first.
 
    It records the stage base, runs `implementer` ↔ `verifier` with a budget of 2
-   fix cycles, appends decisions to `DECISIONS.md`, and on `VERDICT: PASS` writes
-   `NN-slug.report.md`, rewrites `architecture.md`, and commits both with the stage.
-   It returns at most 800 tokens.
+   fix cycles, appends decisions to `DECISIONS.md` — the implementer's as they
+   arrive, and the architect's on `VERDICT: PASS` — then writes `NN-slug.report.md`,
+   rewrites `architecture.md`, and commits both with the stage. It returns at most
+   800 tokens.
 
    If the implementer hits its 25-turn budget it returns `STATUS: RELAY_REQUIRED`,
    and the runner hands the stage to a fresh implementer carrying only the contract
@@ -351,14 +424,16 @@ Show the STATE.md table above, then:
   that branch does not exist or is not the one currently checked out,
 - which stage `next` would run,
 - the `SESSION_STATE.json` contents,
-- a decision summary from `DECISIONS.md`: total, how many Tier 1 and Tier 2, and
-  how many are unconfirmed, confirmed, rejected, deferred, or modified,
+- a decision summary from the *Decision counts* above: total, how many Tier 1 and
+  Tier 2, and how many are unconfirmed, confirmed, rejected, deferred, or modified,
 - whether `specs/<feature>/scratchpad/` exists and what is in it,
 - whether `specs/<feature>/architecture.md` exists and which stage last updated it
-  (the `Last updated:` line in its header) — and, if stages are `done` and it does
+  — read only the `Last updated:` line of its header
+  (`grep -m1 'Last updated:' specs/<feature>/architecture.md`), never the file — and, if stages are `done` and it does
   not exist, that the feature predates the running file: the next passing stage
   creates it, or `/staged-build:cleanup` writes it once every row is `done`,
-- the summary section of the most recent `stages/*.report.md`.
+- the `## Summary` section of the most recent `stages/*.report.md` — that section
+  alone, not the rest of the report.
 
 Change nothing.
 
@@ -383,7 +458,9 @@ Change nothing.
 3. Set the row back to `pending` in STATE.md and delete its `.report.md`, along
    with any `.wip.md` checkpoint and `.verification.log` it left behind.
 4. Remove the decision entries that stage logged from `DECISIONS.md`, or mark them
-   `rejected` with a note saying the stage was redone.
+   `rejected` with a note saying the stage was redone. Find them with
+   `grep -n 'Stage:\*\* NN-' specs/<feature>/DECISIONS.md` and read only those
+   entries' line ranges to edit them — not the whole log.
 5. Run `next`.
 
 ---

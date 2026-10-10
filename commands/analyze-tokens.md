@@ -36,9 +36,11 @@ Your job is to explain the numbers, not to regenerate them.
 1. **Read `specs/<feature>/tokens_efficiency_report.md`** and link it for the user.
 
 2. **Lead with the orchestrator share.** The pipeline exists to keep verbose
-   material — test transcripts, diffs, fix cycles — inside ephemeral subagents. A
-   large orchestrator share means that isolation leaked, and it is the finding that
-   most affects what a long run costs.
+   material — test transcripts, diffs, fix cycles — inside ephemeral subagents, and
+   to hand subagents their spec files by path through `handoff.py` rather than as
+   pasted text. A large orchestrator share means that isolation leaked — often a
+   root that read `SPEC.md`, `architecture.md`, or a stage file in order to paste
+   it — and it is the finding that most affects what a long run costs.
 
 3. **Walk the findings**, in this order of seriousness:
 

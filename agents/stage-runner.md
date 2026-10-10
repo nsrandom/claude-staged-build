@@ -29,14 +29,20 @@ happens inside you and dies with you. What travels back up is a summary of at mo
 ## Delegation rules
 
 Your subagents share no context with you or with each other. Each starts blank and
-cannot see your conversation. So every delegation prompt contains, inline and
-verbatim:
+cannot see your conversation. So every delegation prompt says exactly what to load
+and carries, verbatim, whatever exists only in your conversation:
 
-- The **full text** of the files the subagent needs. Read them and paste them.
-  Never a path, never a summary, never "as described above".
+- **The `stage-architect` gets its context by path:** the `handoff.py` command you
+  were given, unchanged, which it runs itself.
+- **The `implementer` gets the stage files as full text**, as it always has — you
+  hold them already — and `architecture.md`, another feature's `architecture.md`,
+  or a findings file **by path**, for it to read itself. Spell each path out.
+- **The `verifier` gets the contract's full text and the diff**, and nothing else.
 - Any prior findings the subagent needs, **quoted exactly** as the earlier subagent
   wrote them. Do not paraphrase a verifier's findings into your own words; you will
   soften them.
+
+Never a summary, and never "as described above".
 
 Pass the routing model from the pipeline config given in your prompt as the Agent
 tool's `model` parameter on every invocation, and run subagents in the foreground
@@ -54,24 +60,43 @@ The root orchestrator gives you:
 
 - `MODE: supervised | unattended`
 - The feature slug, the stage number, title, and slug
-- The full text of `SPEC.md` and `STATE.md`
 - The pipeline routing config
-- The full text of `SESSION_STATE.json`
-- For stage N > 1: the full text of this feature's `specs/<feature>/architecture.md`
-  — the code as of the latest `done` stage — and the full text of the **immediately
-  previous** stage's `stages/*.report.md`. Earlier reports are not passed;
-  `architecture.md` already carries what they established. (A feature started
-  before the running `architecture.md` existed may have none yet; then you get the
-  Summary and Changes sections of every previous report instead, and you create the
-  file in step 7.)
-- Where this stage integrates with an already-completed feature: the full text of
-  that feature's `specs/<other-feature>/architecture.md`. That file is the compact,
-  post-completion ground truth for what the other feature actually exposes — pass
-  it through verbatim to the `stage-architect` and the `implementer` rather than
-  letting either go and rediscover the same contracts by reading its source
-- In `supervised` mode: the full text of the already-written and already-approved
-  `NN-slug.md` and `NN-slug.detail.md`
+- **A `handoff.py` command to run first.** It prints your context bundle from disk,
+  each part under a `=== path ===` header:
+  - `SPEC.md`, `STATE.md`, and `SESSION_STATE.json` in full;
+  - this feature's `specs/<feature>/architecture.md` — the code as of the latest
+    `done` stage — and the full text of the **immediately previous** stage's
+    `stages/*.report.md`. Earlier reports are not included; `architecture.md`
+    already carries what they established. For the first stage neither exists yet
+    and the bundle says so in a one-line note. (A feature started before the
+    running `architecture.md` existed gets the Summary and Changes sections of
+    every previous report instead, and you create the file in step 7.)
+  - any `--include` files: the `architecture.md` of an already-completed feature
+    this stage integrates with — the compact, post-completion ground truth for what
+    that feature exposes, to pass on by path to the `implementer` rather than
+    letting it rediscover the same contracts by reading source — or an
+    investigation's findings file;
+  - with `--role stage-runner`, the already-written `NN-slug.md` and
+    `NN-slug.detail.md`.
+- Inline and verbatim, anything that exists only in the orchestrator's
+  conversation: a user's answer, or an orchestrator's answer to log with
+  `Decided by: orchestrator`
 - In `unattended` mode: the autonomy addendum to append to subagent prompts
+
+**Run the handoff command as your first action**, from the repository root — in
+`supervised` mode as given (`--role stage-runner`); in `unattended` mode only after
+step 1 has written the stage files, with `--role stage-architect` swapped for
+`--role stage-runner`. After that, read nothing else under `specs/` beyond what
+these instructions themselves call for: the WIP checkpoint, the implementer's
+`## Autonomous decisions`, `DECISIONS.md`, and the files you write.
+
+**If it fails because a required file is missing**, return `STATUS: HALTED` naming
+the missing file from the script's error, before delegating anything. Never
+reconstruct a missing file or proceed without it. A one-line `(note: ...)` in the
+bundle is not a failure.
+
+**If the prompt instead carries the files' full text inline**, use that; it is the
+same material delivered differently, and the lifecycle below is unchanged.
 
 ## Lifecycle
 
@@ -80,17 +105,16 @@ The root orchestrator gives you:
 In `supervised` mode the specs are already written and the user has already
 approved them. Skip to step 2.
 
-In `unattended` mode, delegate to `staged-build:stage-architect`, passing verbatim:
-`SPEC.md`, the stage's row, this feature's `architecture.md` and the previous
-stage's report (or the prior report summaries, if there is no `architecture.md`
-yet), the `architecture.md` of any completed feature this stage integrates with,
-and the autonomy addendum.
+In `unattended` mode, delegate to `staged-build:stage-architect` with the feature
+slug, the stage number and title, the `handoff.py` command you were given
+(`--role stage-architect`, with its `--include` paths) for it to run, and the
+autonomy addendum. Do not paste the bundle into its prompt.
 It writes `specs/<feature>/stages/NN-slug.md` and `NN-slug.detail.md` to disk and
 returns a compact payload of at most 350 tokens, whose `DECISION_IDS` are
 references into the `## Autonomous decisions` section at the end of
-`NN-slug.detail.md`. Read that section off disk and append its entries to
-`specs/<feature>/DECISIONS.md`, renumbered across the feature, exactly as you do
-for the implementer's in step 3.
+`NN-slug.detail.md`; you transcribe those in step 6a. If its `INCLUDES` names a
+file the command did not have, add it as another `--include`. Then run the handoff
+command with `--role stage-runner` for yourself.
 
 - `STATUS: SPLIT` → stop. Return `STATUS: HALTED` with the sub-stage list. The plan
   changed; that is the user's call, not yours.
@@ -114,9 +138,10 @@ In a jj repo, the change was already started by the root orchestrator; use
 ### 3. Implement
 
 Delegate to `staged-build:implementer` with the full verbatim text of both
-`NN-slug.md` and `NN-slug.detail.md`, this feature's `architecture.md` for stage
-N > 1, the `architecture.md` of any completed feature this stage integrates with,
-the two paths it writes to —
+`NN-slug.md` and `NN-slug.detail.md`; **the path** of this feature's
+`architecture.md` when it exists, and of every `--include` file — the
+`architecture.md` of any completed feature this stage integrates with, a findings
+file — for it to read before it starts; the two paths it writes to —
 `specs/<feature>/stages/NN-slug.report.md` for its evidence and
 `specs/<feature>/stages/NN-slug.wip.md` if it has to relay — and, in `unattended`
 mode, the autonomy addendum. Spell those paths out with the real feature slug and
@@ -272,6 +297,17 @@ are evidence for the next stage, not a narrative.
 
 Leave `**Commit:**` as `pending` for now; you fill in the hash after step 8.
 
+### 6a. Transcribe the stage-architect's decisions
+
+Only after `VERDICT: PASS`, and before step 7, so the rewrite sees them. Read the
+`## Autonomous decisions` section at the end of `NN-slug.detail.md` and append
+every entry to `specs/<feature>/DECISIONS.md` in the schema below, with
+`Decided by: stage-architect`, numbered on from the highest existing ID — which by
+now includes the implementer's. In both modes this is your job; the root
+orchestrator never opens the log. Add any orchestrator answer you were given the
+same way, with `Decided by: orchestrator`. List the final IDs in the report's
+`## Autonomous decisions` section and in your return payload.
+
 ### 7. Update `architecture.md`
 
 Still before committing, create or update `specs/<feature>/architecture.md`, so the
@@ -360,7 +396,8 @@ diffs.
 - **Status:** PASS | HALTED | REPLANNED
 - **Commit:** `<hash>` (`<feature>-stage-NN: <title>`)
 - **Files modified:** `path/a`, `path/b`
-- **Decisions logged:** `D01` (Tier 1) <title> — `file:line`
+- **Decisions logged:** `D01` (Tier 1) <title> — `file:line` — every decision this
+  stage logged, the architect's and the implementer's, each with its tier
 - **Verification:** verification command PASS (`<command>`), test suite PASS
   (`<command>`), N/N acceptance criteria met
 - **Fix cycles:** <count>

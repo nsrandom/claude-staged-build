@@ -653,8 +653,10 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
         % fmt_duration(sum(b["duration_seconds"] for b in by_role.values())),
         "",
         "The orchestrator share is the number to watch. The pipeline delegates whole "
-        "stages so that transcripts stay inside ephemeral agents; a high orchestrator "
-        "share means verbose material is leaking upward into the conversation.",
+        "stages so that transcripts stay inside ephemeral agents, and hands each one a "
+        "handoff.py command rather than pasted file text; a high orchestrator share "
+        "means verbose material — build output, or spec files read in to paste — is "
+        "reaching the conversation.",
         "",
         "## By role",
         "",

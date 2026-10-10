@@ -5,6 +5,75 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-10-10
+
+The root orchestrator stays lean in both `next` and `yolo`: subagents load their own
+context from disk, and the root stops reading files in order to paste them. What
+each role receives is unchanged from 1.3.0; only how it is delivered changed. And
+`next` now reminds you to `/clear` when earlier work is still sitting in the
+conversation.
+
+### Added
+
+- **`scripts/handoff.py`.** `--feature <slug> --stage <NN> --role
+  <stage-architect|stage-runner|approval>` prints that role's bundle with a
+  `=== path ===` header per part, and exits non-zero naming any missing required
+  file. `stage-architect` is `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, the
+  feature's `architecture.md`, and the previous stage's full report — the last two
+  optional for the first stage, where a one-line note stands in. `stage-runner`
+  adds `NN-slug.md` and `NN-slug.detail.md`. `approval` is only what `next` shows
+  before running a stage: acceptance criteria, verification command, files
+  expected to change, the test plan, `[large]` step titles, and the architect's
+  `## Autonomous decisions`. `--include <path>` (repeatable) adds another
+  feature's `architecture.md` or a findings file; `--check` validates without
+  printing the bundle. Standard library only.
+- **A clear-context reminder in `next`.** `scripts/context_check.py` reads the
+  current session's transcript (by `CLAUDE_CODE_SESSION_ID`, falling back to the
+  newest transcript for the repo) and reports how much the context has grown since
+  the session's first turn. `next`'s preamble runs it, and when earlier work in the
+  session has added 25k tokens or more, `next` says so before starting and asks
+  whether to stop for a `/clear` or continue. It asks once per stage and never
+  blocks: a missing transcript reads as `unknown` and is ignored.
+
+### Changed
+
+- **Delegation by path.** In `next` and `yolo`, the stage-architect and
+  stage-runner prompts carry the mode, feature, stage, routing config, the
+  `handoff.py` command to run first, and any `--include` paths — not pasted file
+  text. Only what exists solely in the conversation stays inline and verbatim: the
+  user's answers and plan feedback, and relayed findings. `next`'s revision pass
+  goes the same way, with the feedback quoted. The root runs `--check` before every
+  delegation. Routing models and foreground runs are unchanged.
+- **The stage-architect and stage-runner accept either form.** Given a handoff
+  command they run it first and read nothing else under `specs/` beyond their
+  role's own needs; a missing required file is a `CONFLICT` or `HALTED`, never a
+  guess. Inline text still works. The stage-architect may add an integrated
+  feature's `architecture.md` it finds it needs, and reports it under a new
+  `INCLUDES` payload field.
+- **The implementer gets `architecture.md` by path**, alongside the contract and
+  detail the runner already passes as text. The verifier still gets only the
+  contract and the diff; relays and WIP checkpoints are unchanged.
+- **Bookkeeping moved off the root.** On `VERDICT: PASS` the stage-runner appends
+  the architect's `## Autonomous decisions` to `DECISIONS.md`, numbered on from the
+  highest ID, before it rewrites `architecture.md`. It also logs any answer the
+  `yolo` root gave, as `Decided by: orchestrator`. The stage-architect's
+  `DECISION_IDS` now carry each tier and every Tier 2 title, so the root decides
+  from payloads alone. Budgets are unchanged (architect 350, runner 800).
+- **What the root reads** is now `STATE.md` (edited in place), the payloads, the
+  `approval` bundle in `next`, and a specific section on demand. `SPEC.md`,
+  `architecture.md`, stage files, report bodies, `DECISIONS.md`, verifier output,
+  and command output never enter it. The command preambles show decision counts
+  instead of the whole log; `status` reads only `architecture.md`'s `Last updated:`
+  line and the latest report's Summary, and `redo` edits only that stage's decision
+  entries.
+- **`yolo`'s reset section is rewritten as *Staying lean across stages*.** It no
+  longer claims the root can drop material between stages: leanness comes from
+  never loading it, with each stage's context coming from `handoff.py`. The safety
+  valve stays — if a run still grows long, it stops at a stage boundary and asks
+  for `/clear` and a re-run, which resumes from `STATE.md`.
+- **`analyze-tokens`** wording: a high orchestrator share now names spec files read
+  in to paste as a likely cause. Metrics are unchanged.
+
 ## [1.3.0] — 2026-10-10
 
 Each stage now hands the next one better context: a richer report, and a running

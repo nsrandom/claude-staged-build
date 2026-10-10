@@ -24,6 +24,7 @@ Requested: `$ARGUMENTS`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
 - Feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
+- Handoff script: !`echo "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py"`
 
 ### Plan state
 
@@ -33,9 +34,12 @@ Requested: `$ARGUMENTS`
 
 !`cat specs/*/SESSION_STATE.json 2>/dev/null || echo "(none yet)"`
 
-### Decision log
+### Decision counts
 
-!`cat specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+Counts only. The log itself stays on disk; the stage-runner is its writer.
+
+- Decisions: !`grep -cE '^## D[0-9]+' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Tier 2: !`grep -cE '(\*\*Tier:\*\* 2|\(Tier 2)' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
 
 ---
 
@@ -59,19 +63,35 @@ transcripts, diffs, and fix cycles die with it. A twenty-stage run should leave 
 holding twenty short summaries, not twenty build logs — that is what makes the run
 able to reach stage 20 at all.
 
-And even twenty short summaries are twenty things re-read on every turn, which is
-why **you reset between stages** — see *Reset your context at every stage boundary*
-below. It is the difference between a run that costs a few hundred thousand tokens
-and one that costs ten million.
+**Never load stage material, not even on its way to a subagent.** You cannot remove
+anything from your own context once it is there — only the user's `/clear` can — so
+the only way to stay small is never to load it. The stage-runner loads its own
+context from disk with `handoff.py`; you hand it the command, not the text. See
+*Staying lean across stages* below.
+
+You read `STATE.md`, which you edit with targeted changes to one row; the runners'
+payloads; and a specific section of a specific file on demand, if the user asks
+about it. **Never** `SPEC.md`, `architecture.md`, a stage contract or detail file,
+a report body, `DECISIONS.md`, verifier output, or command output.
 
 ## Delegation rules
 
 These are not optional. The pipeline is worthless if they are broken.
 
 **Subagents share no context with you or with each other.** Each one starts blank.
-Every delegation prompt must contain, inline and verbatim, the **full text** of the
-files the subagent needs — never a path, never a summary — and any prior findings
-quoted exactly as the earlier subagent wrote them.
+A stage delegation gives it two things:
+
+- **By path, through `handoff.py`:** the command the subagent runs first — the
+  script path from *Resolved context* above, with `--feature`, `--stage`, `--role`,
+  and one `--include <path>` per extra file. It prints that role's bundle from
+  disk. Never read those files to paste them.
+- **Inline and verbatim: whatever exists only in this conversation** — a user's
+  answer, an answer you gave to a minor question, any prior findings being relayed
+  — quoted exactly as written, never paraphrased.
+
+**Every required path must exist before you delegate.** Run the same command with
+`--check` first; it prints `ok` or the missing files and nothing else. A missing
+file is a major stop, not something to let a subagent guess around.
 
 **Pass the routing model on every invocation.** Look up the role in the routing
 config above and pass it as the Agent tool's `model` parameter. Never omit it.
@@ -79,8 +99,8 @@ config above and pass it as the Agent tool's `model` parameter. Never omit it.
 **Run subagents in the foreground** — pass `run_in_background: false`.
 
 **Subagents cannot talk to the user — you are their only channel.** When one
-returns a question, triage it under the autonomy policy below: answer the minor
-ones yourself and log them, put the major ones to the user.
+returns a question, triage it under the autonomy policy below, from the payload
+alone: answer the minor ones yourself, put the major ones to the user.
 
 Agent names are scoped to this plugin: `staged-build:plan-architect`,
 `staged-build:stage-runner`, `staged-build:stage-architect`,
@@ -109,9 +129,9 @@ latest `done` stage. For stage N > 1 it stands in for the earlier reports.
 
 Where a stage integrates with an already-completed feature, that feature's
 `specs/<other-feature>/architecture.md` is the compact ground truth for its
-entrypoints, public API, invariants, and config keys. Read it and pass it down
-verbatim to the stage-runner rather than letting a subagent go and rediscover the
-same contracts by reading source. `SPEC.md` predates the code; the stage reports
+entrypoints, public API, invariants, and config keys. Pass it down by path —
+`--include specs/<other-feature>/architecture.md` on the handoff command — rather
+than letting a subagent go and rediscover the same contracts by reading source. `SPEC.md` predates the code; the stage reports
 are the truth in fifteen fragments; `architecture.md` is the truth in one.
 
 Resolve `<feature>` from the listing above. If exactly one feature exists, use it.
@@ -219,9 +239,10 @@ It exists so the user can audit an unattended run afterwards, at
 `/staged-build:cleanup`.
 
 The `stage-runner` writes the entries for its own stage as it receives them, so the
-log stays complete even if a run dies mid-stage. You write the entries for
-decisions **you** take — a question you answered, a slug you picked — with
-`Decided by: orchestrator`. Create the file if it is absent:
+log stays complete even if a run dies mid-stage. It also writes the entries for
+decisions **you** take: when you answer a minor question, quote your answer in the
+re-delegation and tell the runner to log it with `Decided by: orchestrator`. You
+never open the log yourself. Create the file if it is absent:
 
 ```markdown
 # Decisions — <feature>
@@ -323,49 +344,38 @@ other, and is not excused because it is in the log.
 
 ---
 
-# Reset your context at every stage boundary
+# Staying lean across stages
 
-This is the single most important economy in an unattended run, and the one place
-where doing nothing is expensive. Your conversation is re-read on every turn, so
-carrying stage 03's history into stage 12 means paying for stage 03 nine more
-times. A root session that never resets accumulates quadratically: measured runs
-have reached 139 turns and ~10M tokens on the root alone, almost all of it stages
-that finished hours earlier.
+You cannot reset your own context. Nothing you read can be taken back out of this
+conversation — only the user's `/clear` does that — and everything in it is re-read
+on every turn. A root session that loads each stage's material accumulates
+quadratically: measured runs have reached 139 turns and ~10M tokens on the root
+alone, almost all of it stages that finished hours earlier.
 
-**So between stages, drop everything from the stage that just finished.** The
-moment you mark a row `done`, the material from that stage — the runner's summary,
-the delegation prompt you built, the file contents you pasted into it, the todo
-churn — has done its job. Nothing you need from it lives only in your context;
-every part of it that matters is on disk.
+So the run stays lean by never loading that material, not by dropping it later:
 
-**Reload lean.** At the start of each stage, rebuild what you need from exactly
-these, read fresh:
+- **Each stage's context comes from `handoff.py`, not from you.** The stage-runner
+  runs it and gets `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, this feature's
+  `architecture.md`, the full report of the **immediately previous** stage — no
+  earlier reports — and that stage's contract and detail files, straight from
+  disk. `architecture.md` and the previous report are rewritten and written by the
+  stage before, so the context is always current without you reading anything.
+- **The bookkeeping is the runner's.** It transcribes every decision into
+  `DECISIONS.md`, writes the report, and rewrites `architecture.md`. You never open
+  any of them.
+- **You hold only what this run cannot do without:** the stage table in
+  `STATE.md`, one payload of at most 800 tokens per stage, and your conversation
+  with the user. Decide whether to stop from the payload alone.
 
-- `specs/<feature>/SESSION_STATE.json`
-- `specs/<feature>/STATE.md`
-- `specs/<feature>/DECISIONS.md`
-- for stage N > 1, `specs/<feature>/architecture.md` and the full
-  `NN-slug.report.md` of the **immediately previous** stage — no earlier reports
+If something you think you need is not in one of those, the right fix is to write it
+to disk for the next runner, not to read it into this conversation.
 
-Plus the `architecture.md` of any completed feature this stage integrates with.
-That is the entire state of the run. If something you think you need is not in one
-of those files, the right fix is to write it to disk, not to keep the transcript.
-
-**Never carry forward:** a completed stage's delegation prompt, the full text of
-its `NN-slug.md` or `.detail.md`, any verifier findings, any implementer payload,
-any command output. Re-read a stage file from disk on the rare occasion you need it
-again; do not scroll back for it.
-
-Read these files fresh at each boundary rather than quoting your own earlier
-reading of them. They change as the run proceeds — `STATE.md`, `DECISIONS.md`, and
-`architecture.md` change every stage — and a stale copy in your context is both wrong and expensive.
-
-If the session has nonetheless grown long — many stages in, or a stage that needed
-relays and fix cycles — **say so and stop at a stage boundary**, telling the user
-to `/clear` and run `/staged-build:yolo` again. The run resumes from `STATE.md`
-with nothing carried over, because every artifact it needs is on disk. Stopping
-cleanly between stages costs one command; running to 100+ turns costs the rest of
-the plan.
+Even so, a payload per stage and a todo list add up. If the session has grown long —
+many stages in, or a stage that needed relays and fix cycles — **say so and stop at
+a stage boundary**, telling the user to `/clear` and run `/staged-build:yolo`
+again. The run resumes from `STATE.md` with nothing carried over, because every
+artifact it needs is on disk. Stopping cleanly between stages costs one command;
+running to 100+ turns costs the rest of the plan.
 
 ---
 
@@ -465,30 +475,40 @@ reset it — the user needs to see what actually happened.
 
    b. **Mark the row `in-progress`** in STATE.md.
 
-   c. **Delegate the whole stage** to `staged-build:stage-runner` with:
+   c. **Delegate the whole stage** to `staged-build:stage-runner` with a prompt
+      that contains only:
 
       - `MODE: unattended`
-      - the feature slug, stage number, title, and slug
-      - the full text of `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, and the
-        routing config
-      - for stage N > 1, the full text of `specs/<feature>/architecture.md` and the
-        full text of the **immediately previous** stage's `stages/*.report.md` —
-        not the Summary and Changes of every earlier report. If a feature started
-        before the running `architecture.md` existed has none yet, pass the
-        Summary and Changes sections of every previous report instead
-      - the `architecture.md` of any completed feature this stage integrates with
+      - the feature slug, and the stage number and title from STATE.md
+      - the routing config
+      - the handoff command it runs first:
+
+        ```sh
+        python3 <handoff script> --feature <feature> --stage NN --role stage-architect [--include <path> ...]
+        ```
+
+        The stage files do not exist yet — the runner's own stage-architect writes
+        them — so this is the architect's bundle. The runner passes the same
+        command to its stage-architect and, once the stage files are written,
+        re-runs it with `--role stage-runner` for itself. Run it with `--check`
+        before delegating.
+      - one `--include` for each completed feature this stage integrates with —
+        `specs/<other-feature>/architecture.md` — and for any investigation
+        findings file an earlier stage wrote for this one to build on
+      - any answer of yours or the user's the stage depends on, quoted verbatim,
+        with an instruction to log yours as `Decided by: orchestrator`
       - the unattended addendum above, verbatim
 
       It specifies the stage, implements it, verifies it independently, self-heals
       within a budget of 2 fix cycles, relays a stuck implementer to a fresh one via
-      its WIP checkpoint (at most twice), appends decisions to `DECISIONS.md`, and
-      on `VERDICT: PASS` writes the report, rewrites `architecture.md`, and commits
+      its WIP checkpoint (at most twice), appends every decision to `DECISIONS.md`
+      — the architect's before it rewrites `architecture.md` — and on
+      `VERDICT: PASS` writes the report, rewrites `architecture.md`, and commits
       both with the stage. It returns at most 800 tokens.
 
    d. **On `STATUS: PASS`** → mark the row `done` in STATE.md, tick the todo, print
-      one line (stage passed, its commit, decisions logged, next stage), **drop
-      that stage's material as described above**, and **go straight into the next
-      stage** — re-reading the state files rather than working from memory.
+      one line (stage passed, its commit, decisions logged, next stage), and **go
+      straight into the next stage**, taking the next row from STATE.md.
 
       **This is the one place `yolo` deliberately contradicts `next`: it
       auto-continues.** Do not stop between stages, do not ask whether to carry on,
@@ -545,7 +565,9 @@ what state the tree is in (committed through stage NN, plus whatever is
 uncommitted). Then stop. Do not offer to work around it.
 
 **When the run finishes**, give: the stages completed and their commits, the branch
-they are on, the decision count by tier, how many stages needed a relay or a fix
+they are on, the decision count by tier — summed from the runners' payloads, or
+counted with `grep -cE` on `DECISIONS.md` if the run resumed after a `/clear`, never
+by reading the log — how many stages needed a relay or a fix
 cycle, anything the verifier flagged and was accepted as non-blocking, the fact
 that nothing was pushed, and the two follow-up commands — noting that
 `/staged-build:cleanup` is also what finalises `specs/<feature>/architecture.md`.

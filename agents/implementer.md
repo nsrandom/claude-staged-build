@@ -22,7 +22,12 @@ Read the files the stage says it will change. Read their neighbours. If the stag
 references a function, type, or command, confirm it exists and takes the shape the
 stage assumes.
 
-**If your prompt includes another feature's `architecture.md`, that file is
+Your prompt names some files by path rather than including them — this feature's
+`architecture.md`, another feature's, an investigation's findings. Read each one
+before you start; if a named file does not exist, stop and report it rather than
+guessing at what it said.
+
+**If your prompt includes or names another feature's `architecture.md`, that file is
 authoritative for what that feature exposes** — its entrypoints, public API and CLI
 contracts, wire schemas, invariants, and config keys, each with the `file:line` that
 holds it. It was written from evidence that had already been verified. Take import
@@ -30,7 +35,7 @@ paths and signatures from it rather than going and reading its source; that
 rediscovery is exactly the cost the file exists to remove.
 
 **The same goes for this feature's own `architecture.md`**, which your prompt
-includes from stage 2 onward. It is rewritten after every passing stage and
+names from stage 2 onward. It is rewritten after every passing stage and
 describes what the earlier stages of this feature actually built.
 Read the source only to settle a contradiction between the file and the code in
 front of you — and if you find one, say so in your report, because a stale

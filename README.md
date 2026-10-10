@@ -27,10 +27,16 @@ delegates each stage whole to an ephemeral `stage-runner`. That runner drives
 `stage-architect`, `implementer`, and `verifier`, commits, writes the stage report
 to disk, and dies — handing back a summary of at most 800 tokens. Test
 transcripts, diffs, and fix cycles never reach your conversation. That is what lets
-a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history. In
-`yolo` it goes further and resets between stages, reloading only `STATE.md`,
-`DECISIONS.md`, `SESSION_STATE.json`, `architecture.md`, and the previous stage's
-report, so a long run does not accumulate its own history quadratically.
+a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history.
+
+**Subagents load their own context; the root never does.** A model cannot remove
+anything from its own context — only your `/clear` can — so the root stays small by
+never reading stage material in the first place. Instead of pasting `SPEC.md`,
+`architecture.md`, the previous report, and the stage files into a delegation
+prompt, it hands the subagent a `scripts/handoff.py` command, and the subagent runs
+it to print exactly its role's bundle from disk. The root holds the stage table,
+the payloads, its conversation with you, and in `next` a short approval summary.
+See [The handoff](#the-handoff).
 
 **Subagents write evidence to disk, not into the chat.** Every role has a return
 budget — `implementer` and `stage-architect` ≤350 tokens, `verifier` ≤300,
@@ -171,7 +177,9 @@ directions.
 
 ### `/staged-build:stage next`
 
-Takes **one** stage from pending to done:
+Takes **one** stage from pending to done. Each delegation goes by path, through
+[`handoff.py`](#the-handoff); what you see at the approval gate is the script's
+`approval` bundle.
 
 1. Gets on the feature's branch (`jj new`, or the one `git` branch for this feature
    — see [Branches](#branches))
@@ -179,8 +187,9 @@ Takes **one** stage from pending to done:
 3. **stage-architect** writes the acceptance contract and the implementation plan
    to disk, and returns a ≤350-token summary
 4. **You verify the plan.** The orchestrator shows the criteria, the verification
-   command, the files in scope, and the test plan, and asks before anything is
-   built. Want changes? The stage-architect revises the files in place.
+   command, the files in scope, the test plan, the `[large]` steps, and the
+   architect's decisions, and asks before anything is built. Want changes? The
+   stage-architect revises the files in place.
 5. **stage-runner** takes it from there in an isolated context:
    **implementer** implements → **verifier** reads the diff *and* runs it →
    `VERDICT: PASS` / `FAIL`
@@ -191,7 +200,12 @@ Takes **one** stage from pending to done:
 7. On PASS → commits the stage, writes `NN-slug.report.md`, and returns a short
    summary. The orchestrator marks it `done` and **stops**
 
-It never auto-continues. Run `next` again for the following stage.
+It never auto-continues. Run `next` again for the following stage — ideally after
+`/clear`. If you forget, `next` notices: `scripts/context_check.py` reads this
+session's transcript, and when earlier work has added more than ~25k tokens to
+the conversation, `next` quotes the figure and asks whether to stop so you can
+`/clear` or to continue anyway. Stopping costs nothing, since the stage resumes
+from `STATE.md`.
 
 If the implementer concludes the *stage spec* was wrong rather than the code, it
 returns `REPLANNED` — the stage is marked `blocked` and the pipeline stops
@@ -242,13 +256,13 @@ is committed with each stage, so the reset rolls it back too.
 
 Runs **every** pending stage, back to back, committing as it goes. Each stage goes
 to its own `stage-runner`, so the root orchestrator collects short summaries rather
-than twenty stages of build output — and it **resets between stages**, dropping the
-finished stage's material and reloading only `STATE.md`, `DECISIONS.md`,
-`SESSION_STATE.json`, `architecture.md`, and the previous stage's report.
-Everything it needs is on disk, so nothing is lost; what goes away is the per-turn
-cost of re-reading stage 3 while running stage 12. If a run does grow long, it stops at a stage boundary and
-tells you to `/clear` and run `/staged-build:yolo` again, which resumes from
-`STATE.md` with a clean slate.
+than twenty stages of build output. It **never loads stage material at all**: each
+runner gets a `handoff.py` command and loads `architecture.md`, the previous
+stage's report, and the stage files from disk itself, and it — not the root —
+writes the decision log. The root keeps `STATE.md` and one payload per stage, and
+decides whether to stop from the payload alone. If a run does grow long anyway, it
+stops at a stage boundary and tells you to `/clear` and run `/staged-build:yolo`
+again, which resumes from `STATE.md` with a clean slate.
 
 **It decides small things itself.** Every judgement call a subagent hands back is
 triaged as major or minor. Minor is naming, placement, a default value, message
@@ -376,6 +390,46 @@ The script is plain Python with no dependencies, so you can also run it directly
 ```bash
 python3 scripts/analyze_tokens.py --repo . --feature search-index
 ```
+
+## The handoff
+
+`scripts/handoff.py` prints one role's context bundle for a stage, with a
+`=== path ===` header before each part, and exits non-zero naming any required file
+that is missing. Standard library only.
+
+```bash
+python3 scripts/handoff.py --feature <slug> --stage <NN> --role <stage-architect|stage-runner|approval> [--include <path> ...] [--check]
+```
+
+| Role | Prints |
+|---|---|
+| `stage-architect` | `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, the feature's `architecture.md`, and the full report of the previous stage. The last two are optional for the first stage — a one-line note stands in. A feature with no `architecture.md` yet gets every earlier report's Summary and Changes instead. |
+| `stage-runner` | The `stage-architect` bundle plus `NN-slug.md` and `NN-slug.detail.md`. |
+| `approval` | Only what `next` shows you before running a stage: the contract's acceptance criteria, verification command, and files expected to change; the detail file's test plan and `[large]` step titles; and its `## Autonomous decisions`. |
+
+`--include` adds a file, such as another feature's `architecture.md` or an
+investigation's findings. `--check` prints `ok` or the missing files and nothing
+else; the orchestrator runs it before every delegation, so no subagent is ever
+handed a path that does not exist.
+
+How the roles use it:
+
+- **The root** puts the command in the delegation prompt, along with the mode, the
+  feature, the stage, the routing config, and — inline and verbatim — only what
+  exists nowhere but in the conversation: your answers, your feedback on a plan,
+  findings being relayed. It reads `STATE.md`, the payloads, and in `next` the
+  `approval` bundle. It never reads `SPEC.md`, `architecture.md`, stage files,
+  report bodies, `DECISIONS.md`, or command output.
+- **The stage-architect and stage-runner** run the command first and read nothing
+  else under `specs/` beyond what their role requires. A missing required file is
+  a `CONFLICT` or `HALTED`, never a guess. Full text pasted inline still works.
+- **The stage-runner** passes the implementer the contract and detail as text, as
+  before, and `architecture.md` by path. On a pass it transcribes the architect's
+  decisions into `DECISIONS.md` before rewriting `architecture.md`. The verifier
+  still gets only the contract and the diff.
+
+Subagents run the script with `python3`, so allow it — `Bash(python3:*)` — or
+expect a prompt per delegation.
 
 ## State layout
 
@@ -550,8 +604,11 @@ the same model, check `CLAUDE_CODE_SUBAGENT_MODEL`.
 
 ## Requirements and limits
 
-- No system-level permissions and no external binaries. `analyze-tokens` needs
-  `python3`, which macOS and every Linux distribution already have.
+- No system-level permissions and no external binaries. `analyze-tokens`, the
+  `handoff.py` context loader, and `next`'s clear-context check
+  (`context_check.py`) need `python3`, which macOS and every Linux
+  distribution already have. Allow `Bash(python3:*)` so subagents can run the
+  handoff without a prompt each time.
 - Writing files under `specs/` needs the normal edit permission you'd grant any
   Claude Code session.
 - **The verifier and implementer must be able to run your test command.** They are

@@ -14,6 +14,31 @@ That division matters: do not re-open the plan's decisions, and do not reorder o
 re-scope the stage because you would have planned it differently. If the stage as
 planned cannot work, say so and stop rather than quietly redesigning it.
 
+## Your input
+
+**If your prompt contains a `handoff.py` command, run it first, exactly as given,
+from the repository root.** It prints your context bundle, each part under a
+`=== path ===` header: `SPEC.md`, `STATE.md`, and `SESSION_STATE.json` in full,
+this feature's `architecture.md`, the full report of the immediately previous
+stage, and any `--include` files — another feature's `architecture.md`, an
+investigation's findings. On a revision pass it also prints this stage's
+`NN-slug.md` and `NN-slug.detail.md`. After that, read nothing else under `specs/`
+beyond what these instructions themselves call for: the bundle is the whole of the
+plan you need. The repository's source is yours to read as below.
+
+**If it fails because a required file is missing**, do not guess at what the file
+would have said and do not go looking for a substitute. Write no stage files and
+return `STATUS: CONFLICT`, naming the missing file from the script's error in
+`SUMMARY`. A one-line `(note: ...)` in the bundle is not a failure: it means the
+file legitimately does not exist yet, as for the first stage.
+
+**If your prompt instead contains the files' full text inline**, use that. It is
+the same material delivered differently, and everything below applies unchanged.
+
+The prompt also carries, inline, whatever exists only in the orchestrator's
+conversation — the user's feedback on a revision pass, a user's answer — quoted
+verbatim. Treat it as the user's own words.
+
 ## Read the code and the prior stage reports first
 
 You are specifying changes to a real codebase. Use Glob and Grep to find every file
@@ -22,21 +47,26 @@ actual types, actual call sites — rather than inventing a shape you expect to 
 Most bad stage specs come from an architect who assumed an interface instead of
 opening the file.
 
-If this stage integrates with an already-completed feature, your prompt contains
+If this stage integrates with an already-completed feature, your bundle contains
 that feature's `specs/<other-feature>/architecture.md` — its public API, CLI
 contracts, invariants, config keys, and test command, synthesised after it actually
 shipped. Treat it as authoritative and quote from it. It exists precisely so you do
 not have to reconstruct another feature's contracts by reading its source; do that
 only where the architecture file is silent on something you need.
 
-For stage N > 1, your prompt contains this feature's own `architecture.md` —
+If `SPEC.md` or the code shows that this stage integrates with a completed feature
+whose `architecture.md` was not included, read `specs/<other-feature>/architecture.md`
+yourself — that is the one addition to your bundle you may make — and name it under
+`INCLUDES` in your payload, so it is passed on to everyone after you.
+
+For stage N > 1, your bundle contains this feature's own `architecture.md` —
 rewritten after every stage to describe the code as of the latest `done` stage —
 and the full report of the immediately previous stage, whose **Behaviour as built**
 and **Superseded** sections state the rules that now hold and the ones that no
 longer do. Treat those as ground truth for what actually landed: exact property
 names, exact exports, exact types, exact rules. (A feature that predates the
-running `architecture.md` sends you the Summary and Changes sections of every
-previous report instead; treat them the same way.) `SPEC.md` is what someone
+running `architecture.md` gets the Summary and Changes sections of every previous
+report instead; treat them the same way.) `SPEC.md` is what someone
 predicted before any code existed. Where the plan and the reports disagree, the
 landed code wins — and if the disagreement is big enough to invalidate this stage,
 that is a conflict, not something to paper over.
@@ -198,7 +228,8 @@ convention that would span many files. Stop and report those.
 ## Revision pass
 
 Sometimes you are re-invoked with the user's feedback on a plan you already wrote,
-quoted verbatim. Then:
+quoted verbatim, alongside a handoff command whose bundle includes the two stage
+files you wrote. Then:
 
 Edit the plan files **in place**. Follow the user's instructions exactly — they own
 the plan. Where feedback conflicts with what the code actually does, say so with
@@ -236,14 +267,19 @@ STAGE_FILES_WRITTEN:
 ACCEPTANCE_CRITERIA_COUNT: <N>
 VERIFICATION_COMMAND: "<command>"
 LARGE_STEPS: ["Step 3 — <title>"]
-DECISION_IDS: [D01 (Tier 1), D02 (Tier 2)]
+DECISION_IDS: [D01 (Tier 1), D02 (Tier 2) — <title>]
+INCLUDES: [specs/<other-feature>/architecture.md]
 SUMMARY: <1-4 sentences on the stage's shape and anything the implementer is
   likely to get wrong>
 ```
 
 `DECISION_IDS` carries references into the `## Autonomous decisions` section you
-wrote at the end of `NN-slug.detail.md` — never the calls, alternatives, or
-rationale themselves. If you took none, write `DECISION_IDS: []`.
+wrote at the end of `NN-slug.detail.md`: every ID with its tier, and the title of
+each Tier 2 decision — never the calls, alternatives, or rationale themselves. The
+orchestrator decides from this line alone whether anything needs the user, without
+opening the file. If you took none, write `DECISION_IDS: []`.
+
+`INCLUDES` lists any file you read beyond your bundle under the rule above, or `[]`.
 
 On `SPLIT`, list the sub-stages you created in `SUMMARY` and say why you split it.
 On `CONFLICT`, say in `SUMMARY` exactly what contradicts the codebase and what the
