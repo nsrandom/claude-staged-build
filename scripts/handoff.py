@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Print one role's context bundle for a staged-build stage.
+"""Write or print one role's context bundle for a staged-build stage.
 
 The root orchestrator never loads stage material into its own context. Instead it
 hands each subagent a command line for this script; the subagent runs it first and
 gets exactly the files its role needs, each under a `=== path ===` header.
 
+With `--out`, the bundle goes to a file — by default
+specs/<feature>/stages/.handoff-NN-<role>.md — and stdout carries only that path
+and a manifest of the parts with approximate token counts. The agent then Reads
+the file once. Without it, the bundle is printed, as before; a large one exceeds
+Claude Code's Bash output limit and costs the agent an extra Read anyway.
+
 Roles:
 
   stage-architect  SPEC.md, STATE.md, SESSION_STATE.json in full, plus the
-                   feature's architecture.md and the full report of the stage
-                   before this one. For the first stage both of those are
-                   optional and a one-line note is printed instead. For a later
-                   stage the previous report is required; a feature that
+                   feature's architecture.md and the previous stage's report,
+                   trimmed to its **Commit:** line and its Behaviour as built and
+                   Superseded sections — architecture.md carries the rest; pass
+                   --full-previous-report for all of it. For the first stage both
+                   are optional and a one-line note is printed instead. For a
+                   later stage the previous report is required; a feature that
                    predates the running architecture.md gets the Summary and
                    Changes sections of every earlier report in its place.
   stage-runner     the stage-architect bundle, plus this stage's NN-slug.md and
@@ -19,7 +27,8 @@ Roles:
   approval         only what `next` shows the user before running a stage: the
                    contract's acceptance criteria, verification command and files
                    expected to change; the detail file's test plan and [large]
-                   step titles; and its Autonomous decisions section.
+                   step titles; and its Autonomous decisions section, verbatim,
+                   whatever entry format it uses.
 
 Exits 1 when a required file is missing, naming every missing file on stderr.
 Standard library only.
@@ -29,9 +38,15 @@ import argparse
 import glob
 import os
 import re
+import subprocess
 import sys
 
 ROLES = ("stage-architect", "stage-runner", "approval")
+
+CHARS_PER_TOKEN = 4  # rough; the manifest only needs the order of magnitude
+
+# The parts of a previous report that architecture.md does not already carry.
+PREVIOUS_REPORT_SECTIONS = ["Behaviour as built", "Superseded"]
 
 # A stage contract is `NN-slug.md` or `NN-a-slug.md`; every sibling file
 # (.detail.md, .report.md, .wip.md, .findings.md) has a second dot.
@@ -144,7 +159,23 @@ class Feature:
         return not any(k + "-" < own for k, _ in self.stage_files())
 
 
-def architect_bundle(f):
+def previous_report(rel, text, full):
+    """The previous stage's report: full, or trimmed to what architecture.md lacks."""
+    if full:
+        return block(rel, text)
+    commit = next((l.strip() for l in text.splitlines() if l.strip().startswith("**Commit:**")), None)
+    found = sections(text, PREVIOUS_REPORT_SECTIONS)
+    label = "Commit, Behaviour as built, Superseded"
+    if not found:
+        # A report written before 1.3.0 has neither section; its Summary and
+        # Changes are the nearest equivalent.
+        found = sections(text, ["Summary", "Changes"])
+        label = "Commit, Summary, Changes — it predates Behaviour as built"
+    parts = ([commit] if commit else []) + list(found.values())
+    return block("%s (%s)" % (rel, label), "\n\n".join(parts) or "(no such sections)")
+
+
+def architect_bundle(f, full_previous=False):
     out = []
     for name in ("SPEC.md", "STATE.md", "SESSION_STATE.json"):
         rel = f.path(name)
@@ -174,7 +205,7 @@ def architect_bundle(f):
 
     if prev:
         rel = f.path("stages", prev[-1])
-        out.append(block(rel, read(f.abs(rel))))
+        out.append(previous_report(rel, read(f.abs(rel)), full_previous))
     elif first:
         out.append(note("no previous stage report; this is the first stage"))
     else:
@@ -182,8 +213,8 @@ def architect_bundle(f):
     return out
 
 
-def runner_bundle(f):
-    out = architect_bundle(f)
+def runner_bundle(f, full_previous=False):
+    out = architect_bundle(f, full_previous)
     name = f.contract()
     if name:
         for rel in (f.path("stages", name), f.path("stages", name[:-3] + ".detail.md")):
@@ -193,7 +224,7 @@ def runner_bundle(f):
     return out
 
 
-def approval_bundle(f):
+def approval_bundle(f, full_previous=False):
     name = f.contract()
     if not name:
         return []
@@ -220,10 +251,40 @@ def approval_bundle(f):
     return out
 
 
+def label_of(part):
+    first = part.splitlines()[0] if part else ""
+    if first.startswith("=== ") and first.endswith(" ==="):
+        return first[4:-4]
+    return first.strip()
+
+
+def manifest(parts):
+    lines = []
+    total = 0
+    for part in parts:
+        tokens = len(part) // CHARS_PER_TOKEN
+        total += tokens
+        lines.append("  ~%6d  %s" % (tokens, label_of(part)))
+    return lines, total
+
+
+def git_ignored(repo, rel):
+    """True/False from `git check-ignore`, or None outside a git repo."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo, "check-ignore", "-q", rel],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return {0: True, 1: False}.get(done.returncode)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Print a staged-build role's context bundle, one `=== path ===` "
-        "header per part. Run from the repository root.",
+        description="Write or print a staged-build role's context bundle, one "
+        "`=== path ===` header per part. Run from the repository root.",
         epilog="Exits 1 if a required file is missing. architecture.md and the previous "
         "report are optional only for the first stage.",
     )
@@ -244,6 +305,20 @@ def main():
         help="print nothing but 'ok' or the missing files; for the orchestrator's "
         "pre-delegation check",
     )
+    parser.add_argument(
+        "--out",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="write the bundle to PATH (default specs/<feature>/stages/"
+        ".handoff-NN-<role>.md) and print only the path and a manifest of its parts",
+    )
+    parser.add_argument(
+        "--full-previous-report",
+        action="store_true",
+        help="include the previous stage's whole report instead of its Commit line, "
+        "Behaviour as built, and Superseded",
+    )
     parser.add_argument("--repo", default=os.getcwd(), help="repository root (default: cwd)")
     args = parser.parse_args()
 
@@ -260,7 +335,7 @@ def main():
         "stage-architect": architect_bundle,
         "stage-runner": runner_bundle,
         "approval": approval_bundle,
-    }[args.role](f)
+    }[args.role](f, args.full_previous_report)
 
     for rel in args.include:
         text = f.require(rel)
@@ -274,7 +349,21 @@ def main():
     if args.check:
         print("ok")
         return 0
-    sys.stdout.write("\n".join(out))
+    if args.out is None:
+        sys.stdout.write("\n".join(out))
+        return 0
+
+    rel = args.out or f.path("stages", ".handoff-%s-%s.md" % (stage, args.role))
+    dest = rel if os.path.isabs(rel) else f.abs(rel)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out))
+    lines, total = manifest(out)
+    print(rel)
+    print("~%d tokens in %d parts — Read the file once:" % (total, len(out)))
+    print("\n".join(lines))
+    if git_ignored(f.repo, rel) is False:
+        print("warning: %s is not gitignored; add `specs/**/.handoff-*` to .gitignore" % rel)
     return 0
 
 

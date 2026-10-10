@@ -61,12 +61,14 @@ The root orchestrator gives you:
 - `MODE: supervised | unattended`
 - The feature slug, the stage number, title, and slug
 - The pipeline routing config
-- **A `handoff.py` command to run first.** It prints your context bundle from disk,
-  each part under a `=== path ===` header:
+- **A `handoff.py` command to run first.** With `--out` it writes your context
+  bundle to one file and prints only the path and a manifest of its parts; **Read
+  that file once, in full.** Each part sits under a `=== path ===` header:
   - `SPEC.md`, `STATE.md`, and `SESSION_STATE.json` in full;
   - this feature's `specs/<feature>/architecture.md` — the code as of the latest
-    `done` stage — and the full text of the **immediately previous** stage's
-    `stages/*.report.md`. Earlier reports are not included; `architecture.md`
+    `done` stage — and the **immediately previous** stage's report, trimmed to its
+    `**Commit:**` line and its **Behaviour as built** and **Superseded** sections.
+    Earlier reports, and the rest of that one, are not included; `architecture.md`
     already carries what they established. For the first stage neither exists yet
     and the bundle says so in a one-line note. (A feature started before the
     running `architecture.md` existed gets the Summary and Changes sections of
@@ -87,8 +89,10 @@ The root orchestrator gives you:
 `supervised` mode as given (`--role stage-runner`); in `unattended` mode only after
 step 1 has written the stage files, with `--role stage-architect` swapped for
 `--role stage-runner`. After that, read nothing else under `specs/` beyond what
-these instructions themselves call for: the WIP checkpoint, the implementer's
-`## Autonomous decisions`, `DECISIONS.md`, and the files you write.
+these instructions themselves call for: the WIP checkpoint, the
+`## Autonomous decisions` sections of the implementer's report and the detail
+file, the highest decision ID in `DECISIONS.md` — found with a grep, never by
+reading the log — and the files you write.
 
 **If it fails because a required file is missing**, return `STATUS: HALTED` naming
 the missing file from the script's error, before delegating anything. Never
@@ -107,7 +111,7 @@ approved them. Skip to step 2.
 
 In `unattended` mode, delegate to `staged-build:stage-architect` with the feature
 slug, the stage number and title, the `handoff.py` command you were given
-(`--role stage-architect`, with its `--include` paths) for it to run, and the
+(`--role stage-architect --out`, with its `--include` paths) for it to run, and the
 autonomy addendum. Do not paste the bundle into its prompt.
 It writes `specs/<feature>/stages/NN-slug.md` and `NN-slug.detail.md` to disk and
 returns a compact payload of at most 350 tokens, whose `DECISION_IDS` are
@@ -146,14 +150,16 @@ file — for it to read before it starts; the two paths it writes to —
 `specs/<feature>/stages/NN-slug.wip.md` if it has to relay — and, in `unattended`
 mode, the autonomy addendum. Spell those paths out with the real feature slug and
 stage slug substituted; the subagent cannot see your conversation and should not be
-guessing at where its own output belongs. It writes production code, puts long-term tests in the project's main
+guessing at where its own output belongs. Never give it `DECISIONS.md`, by path or
+as text: a decision it needs is already in the contract, the detail file, or
+`architecture.md`. It writes production code, puts long-term tests in the project's main
 tests directory, confines throwaway checks to `specs/<feature>/scratchpad/`, writes
 its evidence to `NN-slug.report.md`, and returns at most 350 tokens:
 
 ```yaml
 STATUS: PASS | FAIL | REPLANNED | RELAY_REQUIRED
 FILES_MODIFIED: [path/a, path/b]
-DECISION_IDS: [D01 (Tier 1)]
+DECISION_IDS: [D01 (Minor)]
 SUMMARY: <1-2 sentences>
 ```
 
@@ -166,12 +172,12 @@ SUMMARY: <1-2 sentences>
 - **`STATUS: RELAY_REQUIRED`** → step 3a. This is not a failure and does not stop
   the stage.
 
-`DECISION_IDS` is a list of references, not the decisions themselves. Open
-`specs/<feature>/stages/NN-slug.report.md`, read its `## Autonomous decisions`
-section, and append every entry it lists to `specs/<feature>/DECISIONS.md` now, in
-the schema below, renumbered to continue from the highest existing ID across the
-feature — before you do anything else. A run that dies here must still leave a
-complete log.
+`DECISION_IDS` is a list of references, not the decisions themselves. Read the
+`## Autonomous decisions` section of `specs/<feature>/stages/NN-slug.report.md` —
+that section, not the whole report — and append every entry it lists to
+`specs/<feature>/DECISIONS.md` now, in the formats below, renumbered to continue
+from the highest existing ID — before you do anything else. A run that dies here
+must still leave a complete log.
 
 ### 3a. Relay a stuck implementer instead of arguing with it
 
@@ -281,7 +287,7 @@ is where the verbose material lives, so that it does not have to travel:
 checkpoint said it was stuck on, or "none">
 
 ## Autonomous decisions
-<IDs and titles logged to DECISIONS.md by this stage, with tiers>
+<IDs and titles logged to DECISIONS.md by this stage, with levels>
 ```
 
 The **Summary** and **Changes** sections are what later stages inherit as ground
@@ -301,12 +307,15 @@ Leave `**Commit:**` as `pending` for now; you fill in the hash after step 8.
 
 Only after `VERDICT: PASS`, and before step 7, so the rewrite sees them. Read the
 `## Autonomous decisions` section at the end of `NN-slug.detail.md` and append
-every entry to `specs/<feature>/DECISIONS.md` in the schema below, with
-`Decided by: stage-architect`, numbered on from the highest existing ID — which by
-now includes the implementer's. In both modes this is your job; the root
+every entry to `specs/<feature>/DECISIONS.md` in the formats below — a Significant
+entry with `Decided by: stage-architect` — numbered on from the highest existing ID,
+which by now includes the implementer's. In both modes this is your job; the root
 orchestrator never opens the log. Add any orchestrator answer you were given the
 same way, with `Decided by: orchestrator`. List the final IDs in the report's
 `## Autonomous decisions` section and in your return payload.
+
+Keep the entries you appended in this stage — the implementer's, the architect's,
+and any orchestrator answer — for step 7. You wrote them, so you already hold them.
 
 ### 7. Update `architecture.md`
 
@@ -316,7 +325,9 @@ exactly four inputs:
 
 - the previous `architecture.md`, if there is one,
 - the report you just wrote, including **Behaviour as built** and **Superseded**,
-- `specs/<feature>/DECISIONS.md`,
+- the decision entries **this stage** appended (step 6a) — never the whole
+  `DECISIONS.md`: earlier stages' decisions are already in the previous
+  `architecture.md`,
 - `specs/<feature>/SESSION_STATE.json`.
 
 Do not re-read source files to write it. Read one only to settle a contradiction
@@ -334,7 +345,7 @@ about everything else. If an update would go over, cut prose, never contracts.
 # <feature> — architecture
 
 Updated after every stage from the previous architecture.md, the latest stage
-report, DECISIONS.md, and SESSION_STATE.json. Last updated: stage NN — <title>.
+report, that stage's decisions, and SESSION_STATE.json. Last updated: stage NN — <title>.
 This is the authoritative reference for the code as of the latest `done` stage.
 SPEC.md is what was predicted before it was built; the stage reports are the history.
 
@@ -374,11 +385,13 @@ constant that a decision landed as "one named place to change", with its
 Only after `VERDICT: PASS`, and after steps 6 and 7:
 
 ```sh
-git add -A && git commit -m "<feature>-stage-NN: <title>"
+git add -A -- . ':(exclude)specs/*/stages/.handoff-*' && git commit -m "<feature>-stage-NN: <title>"
 ```
 
 Include the stage's `specs/` files — the report and `architecture.md` among them —
-so the branch carries its own plan. Never `--amend`, never `--force`, never reset,
+so the branch carries its own plan. Never the `stages/.handoff-*` bundles: they
+are scratch copies of files already on disk, and the pathspec above leaves them out
+even where `.gitignore` does not. Never `--amend`, never `--force`, never reset,
 never push, never branch or merge. In a jj repo,
 `jj describe -m "<feature>-stage-NN: <title>"`.
 
@@ -396,8 +409,8 @@ diffs.
 - **Status:** PASS | HALTED | REPLANNED
 - **Commit:** `<hash>` (`<feature>-stage-NN: <title>`)
 - **Files modified:** `path/a`, `path/b`
-- **Decisions logged:** `D01` (Tier 1) <title> — `file:line` — every decision this
-  stage logged, the architect's and the implementer's, each with its tier
+- **Decisions logged:** `D01` (Minor) <title> — `file:line` — every decision this
+  stage logged, the architect's and the implementer's, each with its level
 - **Verification:** verification command PASS (`<command>`), test suite PASS
   (`<command>`), N/N acceptance criteria met
 - **Fix cycles:** <count>
@@ -415,24 +428,54 @@ Then terminate. Do not start the next stage. That is the root orchestrator's cal
 ## The decision log
 
 You are the only writer of `specs/<feature>/DECISIONS.md` while your stage runs.
-Subagents report decisions; you transcribe them, numbered in order across the whole
-feature (continue from the highest existing ID):
+Subagents report decisions; you transcribe them, numbered in one sequence across
+the whole feature and across both levels.
+
+**Never read the whole log.** Get the next ID with a grep for the highest one:
+
+```sh
+grep -ohE '^(## |- )D[0-9]+' specs/<feature>/DECISIONS.md | grep -oE '[0-9]+' | sort -n | tail -1
+```
+
+and number on from it (`D07`, `D08`, …). Then append; the file only grows.
+
+**Minor** decisions are one line each, at the end of the `## Minor decisions`
+section — create that section just under the file header if the log has none.
+The fields are ID, title, decision, where to change it, and status, and the status
+starts as `confirmed`, because the user confirms Minor decisions as they are; they
+can still reopen one at cleanup:
 
 ```markdown
-## D07 — Retry budget for the fetch helper
+## Minor decisions
+
+- D07 · Retry budget · 3 attempts, exponential backoff · src/net/fetch.ts:12 · confirmed
+```
+
+**Significant** decisions keep the full entry, appended at the end of the file,
+with status `unconfirmed` — each one is reviewed at cleanup:
+
+```markdown
+## D08 — Lenient boolean parsing for config flags
 
 - **Stage:** 03-fetch-retry
-- **Tier:** 1
+- **Level:** Significant
 - **Decided by:** implementer
-- **The call:** how many times to retry a failed fetch before giving up
-- **Decision:** 3 attempts with exponential backoff
-- **Instead of:** a single attempt, or a caller-supplied count
-- **Tradeoffs & implications:** a slow endpoint now costs up to 3x the latency
-  before surfacing an error; callers cannot opt out without a code change
-- **Because:** the criterion says "retries transient failures" and names no number;
-  3 matches `uploadWithRetry` in src/net/upload.ts:44
-- **Change it here:** `MAX_FETCH_ATTEMPTS` in src/net/fetch.ts:12
+- **The call:** whether a non-boolean JSON value for `retry` is rejected or coerced
+- **Decision:** coerce `"true"`/`"false"` strings; reject anything else
+- **Instead of:** rejecting every non-boolean, or coercing any truthy value
+- **Tradeoffs & implications:** hand-edited configs keep working; a typo such as
+  `"ture"` is still an error, but `"false"` no longer is
+- **Because:** the criterion says "accepts the documented config" and the README
+  example quotes its booleans
+- **Change it here:** `parse_flag` in src/config.ts:40
 - **Status:** unconfirmed
 ```
 
-Log decisions **you** take as well, with `Decided by: stage-runner`.
+If a subagent sent a decision as Minor but it touches logging, masking, or
+retention of user data, or leaves a known defect unfixed or deferred, log it as
+Significant and say so in your report. Older logs may still use `**Tier:** 1` and
+`**Tier:** 2` entries; leave them as they are — Tier 1 reads as Minor, Tier 2 as
+Significant — and write new entries in the formats above.
+
+Log decisions **you** take as well, with `Decided by: stage-runner` on a
+Significant entry.

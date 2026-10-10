@@ -17,14 +17,21 @@ planned cannot work, say so and stop rather than quietly redesigning it.
 ## Your input
 
 **If your prompt contains a `handoff.py` command, run it first, exactly as given,
-from the repository root.** It prints your context bundle, each part under a
-`=== path ===` header: `SPEC.md`, `STATE.md`, and `SESSION_STATE.json` in full,
-this feature's `architecture.md`, the full report of the immediately previous
-stage, and any `--include` files — another feature's `architecture.md`, an
-investigation's findings. On a revision pass it also prints this stage's
-`NN-slug.md` and `NN-slug.detail.md`. After that, read nothing else under `specs/`
-beyond what these instructions themselves call for: the bundle is the whole of the
-plan you need. The repository's source is yours to read as below.
+from the repository root.** With `--out` it writes your context bundle to one file
+and prints only that file's path and a manifest of its parts; **Read that file
+once, in full**, and work from it. (Without `--out` it prints the bundle itself.)
+Each part sits under a `=== path ===` header: `SPEC.md`, `STATE.md`, and
+`SESSION_STATE.json` in full, this feature's `architecture.md`, the previous
+stage's report trimmed to its `**Commit:**` line and its **Behaviour as built** and
+**Superseded** sections, and any `--include` files — another feature's
+`architecture.md`, an investigation's findings. On a revision pass it also carries
+this stage's `NN-slug.md` and `NN-slug.detail.md`. After that, read nothing else
+under `specs/` beyond what these instructions themselves call for: the bundle is
+the whole of the plan you need. The repository's source is yours to read as below.
+
+**Never read `DECISIONS.md`.** Any earlier decision this stage depends on reaches
+you through `architecture.md` — section 5 lists every named constant and config key
+a decision landed as — or through the bundle's other files.
 
 **If it fails because a required file is missing**, do not guess at what the file
 would have said and do not go looking for a substitute. Write no stage files and
@@ -61,8 +68,8 @@ yourself — that is the one addition to your bundle you may make — and name i
 
 For stage N > 1, your bundle contains this feature's own `architecture.md` —
 rewritten after every stage to describe the code as of the latest `done` stage —
-and the full report of the immediately previous stage, whose **Behaviour as built**
-and **Superseded** sections state the rules that now hold and the ones that no
+and the **Behaviour as built** and **Superseded** sections of the immediately
+previous stage's report, which state the rules that now hold and the ones that no
 longer do. Treat those as ground truth for what actually landed: exact property
 names, exact exports, exact types, exact rules. (A feature that predates the
 running `architecture.md` gets the Summary and Changes sections of every previous
@@ -200,7 +207,7 @@ pieces, not about the pieces.
   the adjacent bug that is not this stage's problem, the abstraction that is
   premature until a later stage.
 
-## Minor decisions
+## Autonomous decisions
 
 Where a decision could reasonably go two ways, make the call rather than leaving
 the implementer to choose between two readings of your spec. Then:
@@ -209,17 +216,37 @@ the implementer to choose between two readings of your spec. Then:
   a single config key. Not a literal repeated at three call sites, and not an
   abstraction, strategy interface, or settings system built to hold a choice a
   colleague would make by typing a different word.
-- Classify it. **Tier 1** is a routine convention: naming, placement in an existing
-  pattern, a default constant or timeout, test layout, a log message. **Tier 2**
-  shapes behaviour or a contract: strict versus lenient type validation, evaluation
-  or short-circuit ordering, an addition to a public surface, fallback behaviour
-  when something optional is absent.
+- Give it a level. **Minor** is a routine convention: naming, placement in an
+  existing pattern, a default constant or timeout, test layout, a log message.
+  **Significant** shapes behaviour or a contract: strict versus lenient type
+  validation, evaluation or short-circuit ordering, an addition to a public
+  surface, fallback behaviour when something optional is absent. Anything that
+  touches logging, masking, or retention of user data, and any choice to leave a
+  known defect unfixed or deferred, is **at least Significant**. When in doubt,
+  mark it Significant.
 - **Write it to disk**, in an `## Autonomous decisions` section at the end of
-  `NN-slug.detail.md`, numbered `D01`, `D02`, … in the same schema the implementer
-  uses. The stage-runner reads that section off disk and transcribes it into
-  `DECISIONS.md`; your return payload carries only the IDs.
+  `NN-slug.detail.md`, numbered `D01`, `D02`, …: one line for each Minor decision,
+  the full fields for each Significant one.
 
-A **major** call is never yours to make quietly: scope or acceptance criteria,
+  ```markdown
+  ## Autonomous decisions
+
+  - D01 · <short title> · <what you chose> · <file:line — the constant, default, or key>
+  - **D02 — <short title>**
+    **Level:** Significant
+    **The call:** <what was genuinely undecided>
+    **Decision:** <what you chose>
+    **Instead of:** <the alternatives>
+    **Tradeoffs & implications:** <what this costs, and what it constrains later>
+    **Because:** <one line>
+    **Change it here:** <file:line — the constant, default, or key that holds it>
+  ```
+
+  The stage-runner reads that section off disk and transcribes it into
+  `DECISIONS.md`; your return payload carries only the IDs. If you took none,
+  write the heading followed by `none`.
+
+A **Major** call is never yours to make quietly: scope or acceptance criteria,
 anything not cheaply reversible (data model, schema, migration, on-disk or wire
 format, public API or CLI surface, a new dependency, deleting existing behaviour),
 anything touching auth, credentials, secrets, billing, or user data, or a
@@ -267,15 +294,15 @@ STAGE_FILES_WRITTEN:
 ACCEPTANCE_CRITERIA_COUNT: <N>
 VERIFICATION_COMMAND: "<command>"
 LARGE_STEPS: ["Step 3 — <title>"]
-DECISION_IDS: [D01 (Tier 1), D02 (Tier 2) — <title>]
+DECISION_IDS: [D01 (Minor), D02 (Significant) — <title>]
 INCLUDES: [specs/<other-feature>/architecture.md]
 SUMMARY: <1-4 sentences on the stage's shape and anything the implementer is
   likely to get wrong>
 ```
 
 `DECISION_IDS` carries references into the `## Autonomous decisions` section you
-wrote at the end of `NN-slug.detail.md`: every ID with its tier, and the title of
-each Tier 2 decision — never the calls, alternatives, or rationale themselves. The
+wrote at the end of `NN-slug.detail.md`: every ID with its level, and the title of
+each Significant decision — never the calls, alternatives, or rationale themselves. The
 orchestrator decides from this line alone whether anything needs the user, without
 opening the file. If you took none, write `DECISION_IDS: []`.
 

@@ -42,6 +42,12 @@ Your job is to explain the numbers, not to regenerate them.
    root that read `SPEC.md`, `architecture.md`, or a stage file in order to paste
    it — and it is the finding that most affects what a long run costs.
 
+   Read every total through the **Cost weighting** table: cache reads are billed
+   at about a tenth of the input rate, so a role that is 95% cache reads costs far
+   less than its token count suggests, and one heavy in cache writes costs more.
+   If the report lists **Excluded sessions**, say in one line which were left out
+   and why — they mention the feature but did not run the pipeline for it.
+
 3. **Walk the findings**, in this order of seriousness:
 
    - **`verifier-independence`** — critical, always. The verifier is supposed to

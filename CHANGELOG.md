@@ -5,6 +5,128 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-10-10
+
+Fixes from measuring two real features: schwab-downloader, built on a pre-1.3.0
+version, and fidelity-downloader, built on 1.4.0. Delegation by path worked: four
+stages grew the root's context by about 4.5k tokens each, against about 75k for
+one stage before. But the token analyzer misreported, the stage-architect got more
+expensive, cleanup was the biggest orchestrator phase, and decision tracking cost
+about 0.7M tokens (~3% of the run), 0.5M of it on Minor decisions.
+
+**The decision tiers are renamed.** Readers of older logs can map them like this:
+
+| Before 1.5.0 | From 1.5.0 | Meaning |
+|---|---|---|
+| Major | **Major** | stop and ask the user |
+| "minor" (decide and log) | **Autonomous** | decided without asking, logged in `DECISIONS.md` |
+| Tier 1 | **Minor** | routine convention; one-line entry; confirmed automatically |
+| Tier 2 | **Significant** | shapes behaviour or a contract; full entry; reviewed at cleanup |
+
+The entry field `**Tier:** 1 | 2` is now `**Level:** Minor | Significant`. Existing
+logs are not migrated; everything that reads `DECISIONS.md` accepts both, reading
+Tier 1 as Minor and Tier 2 as Significant.
+
+### Fixed
+
+- **`analyze_tokens.py` double counted.** Claude Code writes one transcript record
+  per content block and repeats the same `message.id` and `usage` on each, and the
+  analyzer added usage for every record — about 2x inflation in tokens and turns.
+  fidelity-downloader reported ~45.8M where ~23.5M was real. Usage and turns now
+  count once per `message.id`, for every role, including across a forked session
+  that repeats its parent's records; tool calls and the final return text still
+  come from every record.
+- **Unrelated sessions were counted as orchestrator.** A session counted if the
+  feature slug appeared anywhere in it, so a hands-on exploration session that only
+  wrote `specs/<feature>/PLAN.md` added 10.0M "orchestrator" tokens. A root session
+  now belongs to the feature only if it ran a `/staged-build:*` command, has a
+  `staged-build:` subagent, or is on the feature's branch and mentions the slug —
+  and not if it evidently worked on another feature, which matters because every
+  command preamble cats every feature's `STATE.md`. Sessions that mention the slug
+  but are left out are listed under a new **Excluded sessions** line with their
+  token totals.
+- **False verifier-independence findings.** All 10 flagged verifiers across both
+  features were false positives. `VERDICT: PASS` matched every verifier's own
+  return-format instruction; it is replaced by a line that *is* a verdict
+  (`^\s*VERDICT:\s*(PASS|FAIL)\s*$`) or phrases like "previous verdict". A bare
+  `detail.md` matched a contract's file list; it is replaced by the detail file's
+  own section headings. Every matching marker is now reported, not just the first,
+  and the addendum markers match its 1.5.0 wording.
+- **The Decisions section** counted any `## ` heading as a decision. It now parses
+  old full entries (`Tier: 1|2`, in a field or the heading), new Significant
+  entries, and one-line Minor entries, and reports "N Minor, M Significant" with a
+  status breakdown for each.
+
+### Added
+
+- **`handoff.py --out [PATH]`.** Writes the bundle to
+  `specs/<feature>/stages/.handoff-NN-<role>.md` and prints only the path and a
+  manifest of its parts with approximate token counts. The stage-architect's
+  bundle had grown to 10–16k tokens, past Claude Code's Bash output limit, so in
+  all 5 stage-architect runs and 2 stage-runner runs the output was saved to a file
+  anyway and the agent paid for a 2KB preview plus an extra Read. Every command now
+  uses `--out`; add `specs/**/.handoff-*` to `.gitignore` (the commands do, and the
+  stage-runner's commit excludes the bundles regardless).
+- **`--full-previous-report`**, for the rare stage that needs the whole previous
+  report (see below).
+- **A cost weighting note** in the token report: per role, the share of cache
+  reads, cache writes, and input/output, since cache reads are billed at a fraction
+  of the rest.
+- **Tests for the analyzer**, `tests/test_analyze_tokens.py`, on synthetic
+  transcripts: repeated message ids, an unrelated session, verifier prompts with
+  and without a real verdict, and a log mixing old and new formats. Standard
+  library only; they also run under pytest.
+
+### Changed
+
+- **The previous stage's report is trimmed in the handoff.** The `stage-architect`
+  and `stage-runner` bundles carry only its `**Commit:**` line and its
+  `## Behaviour as built` and `## Superseded` sections; `architecture.md` already
+  covers the rest. The stage-architect's runs had gone from 0.42M to 0.96M tokens on
+  Opus, with context peaking at 95–109k. fidelity-downloader's stage 04 bundle is
+  now ~8.6k tokens.
+- **`--include` is per stage.** `yolo` and `stage` now say to pass an extra file
+  only to the stages that need it, and never to a cleanup stage unless its brief
+  needs it.
+- **Cleanup is cheaper.** It was the biggest orchestrator phase — 4.0M tokens over
+  36 turns, started without a `/clear` at 88k context, with one AskUserQuestion per
+  Significant decision and one turn per status write, each re-sending 100–127k.
+  Now:
+  - its preamble runs `context_check.py` and recommends `/clear` when the session
+    has grown by 25k tokens or more;
+  - Minor decisions are shown as a table and confirmed without a question — name an
+    ID to reopen one — and the Minor AskUserQuestion step is gone;
+  - Significant decisions are asked about in batches of up to four, one question
+    each with Confirm / Reject / Defer / Modify plus Other, and each batch's
+    statuses are written in the same turn as the next batch's question;
+  - it reads a grep index of the log and loads only the unconfirmed Significant
+    entries in full, rather than the whole file;
+  - it commits the review before running a remediation stage, so the verifier's
+    diff holds only the stage's own changes;
+  - the remediation stage is delegated through `handoff.py --out` like any other.
+- **Slimmer decision log.** Minor decisions are one line under `## Minor decisions`
+  — ID, title, decision, where to change it, and status, which starts as
+  `confirmed` — and Significant decisions keep the full entry with
+  `Level: Significant`. IDs are one sequence across both. Minor logging stays, as
+  an audit trail and a safety net: two decisions filed as Tier 1 in a measured run —
+  how account numbers are masked in logs, and documenting known defects rather than
+  fixing them — arguably were not routine. Every `## Autonomous decisions` return
+  section uses the same two shapes.
+- **Tighter level rule.** Anything that touches logging, masking, or retention of
+  user data, or that leaves a known defect unfixed or deferred, is at least
+  Significant, on top of "when in doubt, Significant"; a call that meets the Major
+  criteria is still Major.
+- **No agent reads the whole `DECISIONS.md`.** Most of the decision-tracking cost
+  was agents reading the log (~30KB by the end) and carrying it for the rest of
+  their turns — implementers and stage-runners every stage. The stage-runner now
+  finds the next ID with a grep and appends, and rewrites `architecture.md` from
+  the previous version plus this stage's new entries. The implementer and
+  stage-architect never open the log. `redo` finds a stage's entries from the IDs
+  in its report.
+- **Command preambles** count one-line Minor entries, count Significant as
+  `Level: Significant` or the old `Tier: 2`, and include one-line statuses in the
+  status breakdown. Cleanup's preamble no longer cats the log.
+
 ## [1.4.0] — 2026-10-10
 
 The root orchestrator stays lean in both `next` and `yolo`: subagents load their own

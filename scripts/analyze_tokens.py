@@ -45,15 +45,37 @@ RETURN_BUDGETS = {
     "stage-runner": 800,
 }
 
-# Heuristic markers for context that must never reach the verifier.
+# Heuristic markers for context that must never reach the verifier, as regexes.
+# Each one looks for the *content* of something the verifier must not see, not a
+# mention of it: every verifier prompt legitimately names the verdict format, and a
+# contract's file list may legitimately name a detail file.
 VERIFIER_LEAK_MARKERS = [
-    ("detail.md", "implementation plan (.detail.md)"),
-    ("wip.md", "relay checkpoint (.wip.md)"),
-    ("## Autonomous decisions", "decision log / autonomy addendum"),
-    ("Unattended run — how to handle", "unattended addendum"),
-    ("DECISION_IDS", "implementer return payload"),
-    ("DECISIONS_LOGGED", "implementer return payload"),
-    ("VERDICT: PASS", "a prior verdict"),
+    # The stage-architect's NN-slug.detail.md section headings. The contract has
+    # its own headings (Goal, Design details, Acceptance criteria, ...), none of
+    # which collide with these.
+    (
+        r"^#{2,3}\s*(Task breakdown|Per-file plan|Edge cases and failure modes|Do not do)\b",
+        "implementation plan content (.detail.md headings)",
+    ),
+    (r"wip\.md", "relay checkpoint (.wip.md)"),
+    (r"^#{1,3}\s*(WIP checkpoint|Where it is stuck)\b", "relay checkpoint content"),
+    (r"## Autonomous decisions", "decision log / autonomy addendum"),
+    # The unattended addendum's heading, and the decision-entry shapes it and the
+    # log share: a Significant entry's Level line (1.5.0), a one-line Minor entry,
+    # and the older Tier line.
+    (r"Unattended run — how to handle", "unattended addendum"),
+    (r"\*\*Level:\*\*\s*(Minor\s*\|\s*)?Significant", "decision entries / unattended addendum"),
+    (r"^\s*[-*]\s*D\d+\s*·.*·", "decision entries / unattended addendum"),
+    (r"\*\*Tier:\*\*\s*(1\s*\|\s*2|[12]\b)", "decision entries / unattended addendum"),
+    (r"DECISION_IDS", "implementer return payload"),
+    (r"DECISIONS_LOGGED", "implementer return payload"),
+    # A line that *is* a verdict, rather than the return-format instruction that
+    # names both verdicts inline.
+    (r"^\s*VERDICT:\s*(PASS|FAIL)\s*$", "a prior verdict"),
+    (r"previous verdict|prior verdict|verifier found", "a prior verdict"),
+]
+VERIFIER_LEAK_RES = [
+    (re.compile(pattern, re.M | re.I), label) for pattern, label in VERIFIER_LEAK_MARKERS
 ]
 
 # The implementer stops at 25 planner turns and relays via a WIP checkpoint rather
@@ -195,20 +217,86 @@ def read_state(repo: str, feature: str) -> dict:
     return state
 
 
+LEVELS = ("Minor", "Significant")
+
+# One-line Minor entry: `- D07 · title · decision · where · status`.
+MINOR_LINE_RE = re.compile(r"^\s*[-*]\s*(D\d+)\s*·(.*)$")
+DECISION_HEADING_RE = re.compile(r"^##\s+(D\d+)\b(.*)$")
+
+
+def status_word(text: str | None) -> str:
+    """`confirmed (superseded: ...)` -> `confirmed`; `modified: x` -> `modified`."""
+    found = re.match(r"\s*`?([a-zA-Z]+)", text or "")
+    return found.group(1).lower() if found else "unknown"
+
+
+def parse_decisions(body: str) -> list:
+    """Every entry in a DECISIONS.md, as {"id", "level", "status"} dicts.
+
+    Accepts all three formats the log has had: full entries with `**Tier:** 1|2`
+    (or `(Tier N, status; ...)` in the heading), full entries with
+    `**Level:** Significant`, and one-line Minor entries. Tier 1 reads as Minor and
+    Tier 2 as Significant. Entries are never migrated on disk.
+    """
+    entries = []
+    current = None
+    for line in body.splitlines():
+        heading = DECISION_HEADING_RE.match(line)
+        if heading:
+            current = {"id": heading.group(1), "level": None, "status": None}
+            entries.append(current)
+            legacy = re.search(r"\(Tier\s*([12])(?:,\s*([^;)]+))?", heading.group(2))
+            if legacy:
+                current["level"] = LEVELS[int(legacy.group(1)) - 1]
+                if legacy.group(2):
+                    current["status"] = status_word(legacy.group(2))
+            continue
+        if line.startswith("#"):
+            current = None
+        one_line = MINOR_LINE_RE.match(line)
+        if one_line and "·" in one_line.group(2):
+            fields = [f.strip() for f in one_line.group(2).split("·")]
+            entries.append(
+                {"id": one_line.group(1), "level": "Minor", "status": status_word(fields[-1])}
+            )
+            current = None
+            continue
+        if current is None:
+            continue
+        level = re.search(r"\*\*Level:\*\*\s*(Minor|Significant)", line, re.I)
+        tier = re.search(r"\*\*Tier:\*\*\s*([12])", line)
+        if level:
+            current["level"] = level.group(1).capitalize()
+        elif tier:
+            current["level"] = LEVELS[int(tier.group(1)) - 1]
+        status = re.search(r"\*\*Status:\*\*\s*(.+)", line)
+        if status:
+            current["status"] = status_word(status.group(1))
+    for entry in entries:
+        entry["status"] = entry["status"] or "unknown"
+    return entries
+
+
 def read_decisions(repo: str, feature: str) -> dict:
     path = os.path.join(repo, "specs", feature, "DECISIONS.md")
-    summary = {"total": 0, "tier1": 0, "tier2": 0, "by_status": Counter()}
+    summary = {
+        "total": 0,
+        "minor": 0,
+        "significant": 0,
+        "unclassified": 0,
+        "by_status": Counter(),
+        "by_level": {"Minor": Counter(), "Significant": Counter(), "unclassified": Counter()},
+    }
     if not os.path.exists(path):
         return summary
     with open(path, "r", errors="ignore") as fh:
         body = fh.read()
-    for block in re.split(r"^## ", body, flags=re.M)[1:]:
+    for entry in parse_decisions(body):
+        level = entry["level"] or "unclassified"
         summary["total"] += 1
-        tier = re.search(r"\*\*Tier:\*\*\s*([12])", block)
-        if tier:
-            summary["tier1" if tier.group(1) == "1" else "tier2"] += 1
-        status = re.search(r"\*\*Status:\*\*\s*([^\n]+)", block)
-        summary["by_status"][status.group(1).strip() if status else "unknown"] += 1
+        summary[level.lower()] += 1
+        summary["by_status"][entry["status"]] += 1
+        summary["by_level"][level][entry["status"]] += 1
     return summary
 
 
@@ -235,7 +323,8 @@ def find_architectures(repo: str, feature: str) -> dict:
 class Invocation:
     """One agent run: a subagent file, or an orchestrator session."""
 
-    def __init__(self, role, model, session, source, description=None, depth=0):
+    def __init__(self, role, model, session, source, description=None, depth=0,
+                 seen_ids=None):
         self.role = role
         self.model = model
         self.session = session
@@ -253,6 +342,12 @@ class Invocation:
         self.end = None
         self.first_prompt = ""
         self.final_text = ""
+        # Claude Code writes one record per content block and repeats the same
+        # message.id and usage on each, so usage and turns count once per id. A
+        # forked or resumed session repeats its parent's records under a new
+        # session id, so collect() shares one set across every invocation.
+        self._seen_ids = set() if seen_ids is None else seen_ids
+        self._final_text_id = None
 
     @property
     def total_tokens(self):
@@ -284,14 +379,19 @@ class Invocation:
             self.first_prompt = text_of(message)
         if rtype != "assistant" or not isinstance(message, dict):
             return
-        self.turns += 1
+        message_id = message.get("id")
+        if message_id is None or message_id not in self._seen_ids:
+            if message_id is not None:
+                self._seen_ids.add(message_id)
+            self.turns += 1
+            usage = message.get("usage") or {}
+            self.input_tokens += usage.get("input_tokens") or 0
+            self.cache_read += usage.get("cache_read_input_tokens") or 0
+            self.cache_creation += usage.get("cache_creation_input_tokens") or 0
+            self.output_tokens += usage.get("output_tokens") or 0
         if not self.model:
             self.model = message.get("model")
-        usage = message.get("usage") or {}
-        self.input_tokens += usage.get("input_tokens") or 0
-        self.cache_read += usage.get("cache_read_input_tokens") or 0
-        self.cache_creation += usage.get("cache_creation_input_tokens") or 0
-        self.output_tokens += usage.get("output_tokens") or 0
+        # Tool calls and text are per block, so they come from every record.
         content = message.get("content")
         if isinstance(content, list):
             for block in content:
@@ -299,7 +399,13 @@ class Invocation:
                     self.tools[block.get("name") or "?"] += 1
         text = text_of(message)
         if text.strip():
-            self.final_text = text
+            # A message split across records keeps all its text blocks; a later
+            # message replaces it.
+            if message_id is not None and message_id == self._final_text_id:
+                self.final_text += "\n" + text
+            else:
+                self.final_text = text
+            self._final_text_id = message_id
 
     def to_dict(self):
         return {
@@ -346,16 +452,118 @@ def role_of(agent_type: str | None) -> str:
     return agent_type.split(":")[-1]
 
 
+STAGED_BUILD_COMMAND = "<command-name>/staged-build:"
+SPECS_WRITE_RE = re.compile(r"specs/([^/\s]+)/")
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def load_meta(agent_file: str) -> dict:
+    meta_path = agent_file[: -len(".jsonl")] + ".meta.json"
+    try:
+        with open(meta_path, "r", errors="ignore") as fh:
+            meta = json.load(fh)
+        return meta if isinstance(meta, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def specs_writes(records) -> Counter:
+    """How many Edit/Write calls each feature's specs/<feature>/ directory received."""
+    writes = Counter()
+    for record in records:
+        message = record.get("message")
+        if record.get("type") != "assistant" or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not (isinstance(block, dict) and block.get("type") == "tool_use"):
+                continue
+            if block.get("name") not in WRITE_TOOLS:
+                continue
+            path = str((block.get("input") or {}).get("file_path") or "")
+            found = SPECS_WRITE_RE.search(path)
+            if found:
+                writes[found.group(1)] += 1
+    return writes
+
+
+def feature_branches(repo: str) -> dict:
+    """{feature: branch} from every specs/*/STATE.md that names one."""
+    out = {}
+    for path in glob.glob(os.path.join(repo, "specs", "*", "STATE.md")):
+        name = os.path.basename(os.path.dirname(path))
+        branch = read_state(repo, name).get("branch")
+        if branch and not branch.startswith("("):
+            out[name] = branch.split()[0]
+    return out
+
+
+def session_tokens(records, agent_files, seen_ids=None) -> int:
+    """Deduplicated token total for a root session and all its subagents."""
+    seen_ids = set() if seen_ids is None else seen_ids
+    root = Invocation("orchestrator", None, None, None, seen_ids=seen_ids)
+    for record in records:
+        if not record.get("isSidechain"):
+            root.ingest(record)
+    total = root.total_tokens
+    for agent_file in agent_files:
+        inv = Invocation("subagent", None, None, None, seen_ids=seen_ids)
+        for record in read_jsonl(agent_file):
+            inv.ingest(record)
+        total += inv.total_tokens
+    return total
+
+
+def classify_session(feature, mentions, ran_command, has_subagents, on_branch,
+                     writes, branches_seen, other_branches):
+    """Return (included, reason) for one root session.
+
+    A session belongs to the feature only when it ran a /staged-build:* command,
+    has a staged-build subagent, or is on the feature's branch — and mentions the
+    feature. Every command preamble cats every feature's STATE.md, so a mention
+    alone proves nothing; nor does a staged-build command, which may have been for
+    another feature. When the session evidently worked on another feature — it
+    wrote more under that feature's specs/ directory, or ran on that feature's
+    branch and never on this one — it is that feature's, not this one's.
+    """
+    if not (mentions or on_branch):
+        return False, None
+    if not (ran_command or has_subagents or (on_branch and mentions)):
+        return False, "no staged-build command or subagent, and not on the feature branch"
+    if writes:
+        top, count = writes.most_common(1)[0]
+        if top != feature and writes.get(feature, 0) < count:
+            return False, "worked on %s (wrote under specs/%s/)" % (top, top)
+    elif not on_branch:
+        for other, other_branch in sorted(other_branches.items()):
+            if other != feature and other_branch in branches_seen:
+                return False, "ran on %s's branch `%s`" % (other, other_branch)
+    return True, None
+
+
 def collect(repo: str, feature: str, state: dict):
-    """Gather every invocation belonging to this feature."""
+    """Gather every invocation belonging to this feature.
+
+    Returns (invocations, sessions_seen, root, excluded), where `excluded` lists
+    the sessions that mention the feature but were judged not to belong to it,
+    with their token totals and the reason, so nothing disappears silently.
+    """
     root = transcript_root(repo)
     invocations = []
     sessions_seen = []
+    excluded = []
     if not os.path.isdir(root):
-        return invocations, sessions_seen, root
+        return invocations, sessions_seen, root, excluded
 
     branch = (state.get("branch") or "").split()[0] if state.get("branch") else None
+    if branch and branch.startswith("("):
+        branch = None  # "(not created yet)"
+    other_branches = feature_branches(repo)
     needle = "specs/%s" % feature
+    seen_ids = set()  # message ids already counted for this feature
+    excluded_seen_ids = set()  # and for the excluded sessions, kept apart
 
     for session_file in sorted(glob.glob(os.path.join(root, "*.jsonl"))):
         session_id = os.path.basename(session_file)[: -len(".jsonl")]
@@ -363,32 +571,41 @@ def collect(repo: str, feature: str, state: dict):
         if not records:
             continue
 
-        blob = "".join(
-            text_of(r.get("message")) for r in records if r.get("type") == "user"
-        )
+        user_records = [
+            r for r in records if r.get("type") == "user" and not r.get("isSidechain")
+        ]
+        blob = "".join(text_of(r.get("message")) for r in user_records)
+        raw_user = "".join(json.dumps(r.get("message"), ensure_ascii=False) for r in user_records)
         branches = {r.get("gitBranch") for r in records if r.get("gitBranch")}
-        relevant = needle in blob or (branch and branch in branches)
+        mentions = needle in blob or feature in blob
+        on_branch = bool(branch and branch in branches)
 
         subagent_dir = os.path.join(root, session_id, "subagents")
         subagent_files = sorted(glob.glob(os.path.join(subagent_dir, "agent-*.jsonl")))
+        metas = {agent_file: load_meta(agent_file) for agent_file in subagent_files}
+        has_subagents = any(
+            str(meta.get("agentType", "")).startswith("staged-build:") for meta in metas.values()
+        )
+        ran_command = STAGED_BUILD_COMMAND in raw_user
 
-        # A session with staged-build subagents belongs to the pipeline even if the
-        # feature slug never appears in a user turn.
-        metas = {}
-        for agent_file in subagent_files:
-            meta_path = agent_file[: -len(".jsonl")] + ".meta.json"
-            meta = {}
-            if os.path.exists(meta_path):
-                try:
-                    with open(meta_path, "r", errors="ignore") as fh:
-                        meta = json.load(fh)
-                except (OSError, ValueError):
-                    meta = {}
-            metas[agent_file] = meta
-            if str(meta.get("agentType", "")).startswith("staged-build:"):
-                relevant = relevant or needle in blob or bool(branch and branch in branches)
+        writes = specs_writes(records)
+        if mentions or on_branch:
+            for agent_file in subagent_files:
+                writes.update(specs_writes(read_jsonl(agent_file)))
 
-        if not relevant:
+        included, reason = classify_session(
+            feature, mentions, ran_command, has_subagents, on_branch,
+            writes, branches, other_branches,
+        )
+        if not included:
+            if reason:
+                excluded.append(
+                    {
+                        "session": session_id,
+                        "tokens": session_tokens(records, subagent_files, excluded_seen_ids),
+                        "reason": reason,
+                    }
+                )
             continue
 
         sessions_seen.append(session_id)
@@ -398,6 +615,7 @@ def collect(repo: str, feature: str, state: dict):
             model=None,
             session=session_id,
             source=os.path.relpath(session_file, root),
+            seen_ids=seen_ids,
         )
         for record in records:
             if record.get("isSidechain"):
@@ -416,6 +634,7 @@ def collect(repo: str, feature: str, state: dict):
                 source=os.path.relpath(agent_file, root),
                 description=meta.get("description"),
                 depth=meta.get("spawnDepth") or 1,
+                seen_ids=seen_ids,
             )
             for record in read_jsonl(agent_file):
                 inv.ingest(record)
@@ -426,10 +645,36 @@ def collect(repo: str, feature: str, state: dict):
             if inv.turns:
                 invocations.append(inv)
 
-    return invocations, sessions_seen, root
+    return invocations, sessions_seen, root, excluded
 
 
 # ---------------------------------------------------------------------- analysis
+
+
+def verifier_leaks(prompt: str) -> list:
+    """Every distinct leak label whose marker matches the prompt, in marker order."""
+    labels = []
+    for pattern, label in VERIFIER_LEAK_RES:
+        if label not in labels and pattern.search(prompt or ""):
+            labels.append(label)
+    return labels
+
+
+def cost_shares(bucket) -> dict:
+    """Percent of a role's tokens that were cache reads, cache writes, and input/output."""
+    total = (
+        bucket["cache_read"]
+        + bucket["cache_creation"]
+        + bucket["input_tokens"]
+        + bucket["output_tokens"]
+    )
+    if not total:
+        return {"cache_read": 0.0, "cache_creation": 0.0, "input_output": 0.0}
+    return {
+        "cache_read": 100.0 * bucket["cache_read"] / total,
+        "cache_creation": 100.0 * bucket["cache_creation"] / total,
+        "input_output": 100.0 * (bucket["input_tokens"] + bucket["output_tokens"]) / total,
+    }
 
 
 def analyse(invocations, state):
@@ -439,6 +684,9 @@ def analyse(invocations, state):
             "turns": 0,
             "tokens": 0,
             "output_tokens": 0,
+            "input_tokens": 0,
+            "cache_read": 0,
+            "cache_creation": 0,
             "duration_seconds": 0.0,
             "tools": Counter(),
             "models": Counter(),
@@ -451,6 +699,9 @@ def analyse(invocations, state):
         bucket["turns"] += inv.turns
         bucket["tokens"] += inv.total_tokens
         bucket["output_tokens"] += inv.output_tokens
+        bucket["input_tokens"] += inv.input_tokens
+        bucket["cache_read"] += inv.cache_read
+        bucket["cache_creation"] += inv.cache_creation
         bucket["duration_seconds"] += inv.duration
         bucket["tools"].update(inv.tools)
         if inv.model:
@@ -493,19 +744,18 @@ def analyse(invocations, state):
     for inv in invocations:
         if inv.role != "verifier":
             continue
-        for marker, label in VERIFIER_LEAK_MARKERS:
-            if marker in inv.first_prompt:
-                findings.append(
-                    {
-                        "kind": "verifier-independence",
-                        "severity": "critical",
-                        "role": inv.role,
-                        "stage": inv.stage,
-                        "detail": "prompt appears to contain %s; the verifier must "
-                        "receive only the contract and the diff" % label,
-                    }
-                )
-                break
+        labels = verifier_leaks(inv.first_prompt)
+        if labels:
+            findings.append(
+                {
+                    "kind": "verifier-independence",
+                    "severity": "critical",
+                    "role": inv.role,
+                    "stage": inv.stage,
+                    "detail": "prompt appears to contain %s; the verifier must "
+                    "receive only the contract and the diff" % "; ".join(labels),
+                }
+            )
 
     # Retry loops.
     retries = Counter()
@@ -607,7 +857,7 @@ def fmt_tokens(count: int) -> str:
 # ----------------------------------------------------------------------- report
 
 
-def build_markdown(feature, repo, state, decisions, invocations, result, root):
+def build_markdown(feature, repo, state, decisions, invocations, result, root, excluded=()):
     by_role = result["by_role"]
     by_stage = result["by_stage"]
     total = sum(b["tokens"] for b in by_role.values())
@@ -630,6 +880,14 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
                 "`%s`" % p for p in result["architectures"]["completed_architectures"]
             )
             or "(none)"
+        ),
+        "- **Excluded sessions:** %s"
+        % (
+            "; ".join(
+                "`%s` %s — %s" % (e["session"][:8], fmt_tokens(e["tokens"]), e["reason"])
+                for e in excluded
+            )
+            or "none"
         ),
         "",
         "## Totals",
@@ -689,6 +947,26 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
             )
         )
 
+    lines += [
+        "",
+        "## Cost weighting",
+        "",
+        "Token totals above weigh every token the same, but cache reads are billed at "
+        "about a tenth of the input rate and cache writes at about 1.25x, so a role "
+        "made mostly of cache reads costs far less than its total suggests.",
+        "",
+        "| Role | Cache read | Cache write | Input + output |",
+        "|---|---|---|---|",
+    ]
+    for role, bucket in sorted(
+        by_role.items(), key=lambda kv: kv[1]["tokens"], reverse=True
+    ):
+        shares = cost_shares(bucket)
+        lines.append(
+            "| `%s` | %.0f%% | %.0f%% | %.0f%% |"
+            % (role, shares["cache_read"], shares["cache_creation"], shares["input_output"])
+        )
+
     if by_stage:
         lines += [
             "",
@@ -745,20 +1023,7 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
             lines.append("")
 
     if decisions["total"]:
-        lines += [
-            "## Decisions",
-            "",
-            "%d logged — %d Tier 1, %d Tier 2. Status: %s."
-            % (
-                decisions["total"],
-                decisions["tier1"],
-                decisions["tier2"],
-                ", ".join(
-                    "%s %s" % (c, s) for s, c in decisions["by_status"].most_common()
-                ),
-            ),
-            "",
-        ]
+        lines += ["## Decisions", "", decision_line(decisions), ""]
 
     lines += [
         "## Per-invocation detail",
@@ -784,13 +1049,39 @@ def build_markdown(feature, repo, state, decisions, invocations, result, root):
     return "\n".join(lines)
 
 
-def build_json(feature, repo, state, decisions, invocations, result, root):
+def decision_line(decisions) -> str:
+    """`N logged — A Minor, B Significant. Minor: 18 confirmed, ... Significant: ...`"""
+    def breakdown(counter):
+        return ", ".join("%d %s" % (c, s) for s, c in counter.most_common()) or "none"
+
+    head = "%d logged — %d Minor, %d Significant" % (
+        decisions["total"],
+        decisions["minor"],
+        decisions["significant"],
+    )
+    if decisions["unclassified"]:
+        head += ", %d unclassified" % decisions["unclassified"]
+    parts = [head + "."]
+    for level in ("Minor", "Significant", "unclassified"):
+        counter = decisions["by_level"][level]
+        if sum(counter.values()):
+            parts.append("%s: %s." % (level, breakdown(counter)))
+    return " ".join(parts)
+
+
+def build_json(feature, repo, state, decisions, invocations, result, root, excluded=()):
     by_role = {
         role: {
             "invocations": bucket["invocations"],
             "turns": bucket["turns"],
             "tokens": bucket["tokens"],
             "output_tokens": bucket["output_tokens"],
+            "input_tokens": bucket["input_tokens"],
+            "cache_read": bucket["cache_read"],
+            "cache_creation": bucket["cache_creation"],
+            "cost_shares_percent": {
+                k: round(v, 1) for k, v in cost_shares(bucket).items()
+            },
             "duration_seconds": round(bucket["duration_seconds"], 1),
             "tools": dict(bucket["tools"].most_common()),
             "models": dict(bucket["models"].most_common()),
@@ -812,10 +1103,13 @@ def build_json(feature, repo, state, decisions, invocations, result, root):
         "stages": state.get("stages", []),
         "decisions": {
             "total": decisions["total"],
-            "tier1": decisions["tier1"],
-            "tier2": decisions["tier2"],
+            "minor": decisions["minor"],
+            "significant": decisions["significant"],
+            "unclassified": decisions["unclassified"],
             "by_status": dict(decisions["by_status"]),
+            "by_level": {k: dict(v) for k, v in decisions["by_level"].items()},
         },
+        "excluded_sessions": list(excluded),
         "totals": {
             "tokens": sum(b["tokens"] for b in by_role.values()),
             "orchestrator_tokens": by_role.get("orchestrator", {}).get("tokens", 0),
@@ -838,7 +1132,7 @@ def build_json(feature, repo, state, decisions, invocations, result, root):
     }
 
 
-def print_summary(feature, result, invocations, out_md):
+def print_summary(feature, result, invocations, out_md, excluded=()):
     by_role = result["by_role"]
     total = sum(b["tokens"] for b in by_role.values())
     orch = by_role.get("orchestrator", {}).get("tokens", 0)
@@ -876,6 +1170,11 @@ def print_summary(feature, result, invocations, out_md):
             "    ! no architecture.md for this feature — it predates the per-stage"
             " file; run /staged-build:cleanup to write it"
         )
+    if excluded:
+        print(
+            "  excluded sessions: "
+            + ", ".join("%s %s" % (e["session"][:8], fmt_tokens(e["tokens"])) for e in excluded)
+        )
     print("  findings: %d critical, %d warning" % (len(criticals), len(warnings)))
     for finding in criticals[:3]:
         print("    ! %s (%s): %s" % (finding["kind"], finding["role"], finding["detail"]))
@@ -905,7 +1204,7 @@ def main(argv=None):
 
     state = read_state(repo, feature)
     decisions = read_decisions(repo, feature)
-    invocations, sessions, root = collect(repo, feature, state)
+    invocations, sessions, root, excluded = collect(repo, feature, state)
 
     if not invocations:
         print(
@@ -925,16 +1224,18 @@ def main(argv=None):
     out_json = os.path.join(out_dir, "tokens_efficiency_report.json")
 
     with open(out_md, "w") as fh:
-        fh.write(build_markdown(feature, repo, state, decisions, invocations, result, root))
+        fh.write(
+            build_markdown(feature, repo, state, decisions, invocations, result, root, excluded)
+        )
     with open(out_json, "w") as fh:
         json.dump(
-            build_json(feature, repo, state, decisions, invocations, result, root),
+            build_json(feature, repo, state, decisions, invocations, result, root, excluded),
             fh,
             indent=2,
         )
 
     if not args.quiet:
-        print_summary(feature, result, invocations, out_md)
+        print_summary(feature, result, invocations, out_md, excluded)
     return 0
 
 

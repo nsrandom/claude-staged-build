@@ -23,6 +23,7 @@ Requested: `$ARGUMENTS`
 - Existing git branches: !`git branch --format='%(refname:short)' 2>/dev/null | tr '\n' ' ' || echo "(n/a)"`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
+- Handoff bundles gitignored: !`grep -q 'specs/\*\*/\.handoff-\*' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
 - Feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
 - Handoff script: !`echo "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py"`
 
@@ -38,8 +39,8 @@ Requested: `$ARGUMENTS`
 
 Counts only. The log itself stays on disk; the stage-runner is its writer.
 
-- Decisions: !`grep -cE '^## D[0-9]+' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
-- Tier 2: !`grep -cE '(\*\*Tier:\*\* 2|\(Tier 2)' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Decisions: !`grep -cE '^(## |- )D[0-9]+' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Significant (including old `Tier 2`): !`grep -cE '(\*\*Level:\*\* Significant|\*\*Tier:\*\* 2|\(Tier 2)' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
 
 ---
 
@@ -83,15 +84,17 @@ A stage delegation gives it two things:
 
 - **By path, through `handoff.py`:** the command the subagent runs first — the
   script path from *Resolved context* above, with `--feature`, `--stage`, `--role`,
-  and one `--include <path>` per extra file. It prints that role's bundle from
-  disk. Never read those files to paste them.
+  `--out`, and one `--include <path>` per extra file. It writes that role's bundle
+  from disk to `specs/<feature>/stages/.handoff-NN-<role>.md` and prints only the
+  path and a short manifest, so the subagent Reads one file once instead of
+  overflowing its Bash output. Never read those files to paste them.
 - **Inline and verbatim: whatever exists only in this conversation** — a user's
-  answer, an answer you gave to a minor question, any prior findings being relayed
-  — quoted exactly as written, never paraphrased.
+  answer, an answer you gave to an autonomous question, any prior findings being
+  relayed — quoted exactly as written, never paraphrased.
 
 **Every required path must exist before you delegate.** Run the same command with
 `--check` first; it prints `ok` or the missing files and nothing else. A missing
-file is a major stop, not something to let a subagent guess around.
+file is a Major stop, not something to let a subagent guess around.
 
 **Pass the routing model on every invocation.** Look up the role in the routing
 config above and pass it as the Agent tool's `model` parameter. Never omit it.
@@ -100,7 +103,7 @@ config above and pass it as the Agent tool's `model` parameter. Never omit it.
 
 **Subagents cannot talk to the user — you are their only channel.** When one
 returns a question, triage it under the autonomy policy below, from the payload
-alone: answer the minor ones yourself, put the major ones to the user.
+alone: decide the autonomous ones yourself, put the Major ones to the user.
 
 Agent names are scoped to this plugin: `staged-build:plan-architect`,
 `staged-build:stage-runner`, `staged-build:stage-architect`,
@@ -113,7 +116,7 @@ specs/<feature>/
   architecture.md                 <- stage-runner: the code as of the latest done stage, updated every stage; cleanup finalises it
   SPEC.md                         <- plan-architect: goal, context, approach, stages, non-goals
   STATE.md                        <- plan-architect: the stage table and the branch binding
-  DECISIONS.md                    <- every decision taken without asking, with tiers
+  DECISIONS.md                    <- every decision taken without asking: Minor as one line, Significant in full
   SESSION_STATE.json              <- runtime state: test command, runtime, shortcuts
   scratchpad/                     <- one-off throwaway verification code (gitignored)
   stages/NN-slug.md               <- stage-architect: the acceptance contract
@@ -121,6 +124,7 @@ specs/<feature>/
   stages/NN-slug.wip.md           <- implementer: relay checkpoint, when one was needed
   stages/NN-slug.report.md        <- stage-runner: evidence and what actually landed
   stages/NN-slug.verification.log <- verifier: the raw command output, kept off every context
+  stages/.handoff-NN-<role>.md    <- handoff.py --out: a role's context bundle (gitignored)
 ```
 
 This feature's own `architecture.md` is rewritten by the stage-runner after every
@@ -143,8 +147,9 @@ If several exist and the user did not name one, ask which. Never guess.
 
 This is what makes `yolo` different from `/staged-build:stage next`, and it is the
 part to get right. Every judgement call that comes back from a subagent — a
-question, an ambiguity, a fork in the road — is either **major** or **minor**.
-Major stops the run. Minor gets decided, logged, and left for review at cleanup.
+question, an ambiguity, a fork in the road — is either **Major** or
+**autonomous**. Major stops the run. An autonomous call gets decided, logged, and
+left for review at cleanup.
 
 ## Major — stop and ask the user
 
@@ -168,7 +173,7 @@ Stop the run, explain where it stopped, and ask. Do not proceed on an assumption
   apply it everywhere.
 - **Two readings lead to materially different work** and nothing in `SPEC.md`, the
   stage file, or the codebase settles which one is meant.
-- **The pipeline itself stopped.** These are always major, without exception:
+- **The pipeline itself stopped.** These are always Major, without exception:
   - the `stage-runner` returned `STATUS: HALTED` or `STATUS: REPLANNED`,
   - the implementer stopped rather than implementing,
   - the stage-architect split the stage or reported a conflict with the codebase,
@@ -182,44 +187,52 @@ Stop the run, explain where it stopped, and ask. Do not proceed on an assumption
   writes a WIP checkpoint and returns `STATUS: RELAY_REQUIRED`, and the runner
   hands the stage to a fresh implementer — up to twice — without stopping. It
   reaches you only as a relay count in the runner's summary. A third relay is a
-  `HALTED`, and that is major like any other.
+  `HALTED`, and that is Major like any other.
 
-## Minor — decide, log, and keep going
+## Autonomous — decide, log, and keep going
 
 Decide it, write it down, and move on. These are the calls a competent colleague
-makes without a meeting. They come in two tiers, and the tier decides how much of
-the user's attention they get back at cleanup:
+makes without a meeting. Each gets one of two levels, and the level decides how
+much of the user's attention it gets back at cleanup:
 
-**Tier 1 — routine conventions.** Naming of identifiers, files, tests, and slugs.
+**Minor — routine conventions.** Naming of identifiers, files, tests, and slugs.
 Placement within a convention the codebase already has. A default value, threshold,
 timeout, limit, or retry count. The wording of a log line, error message, or
 comment, and log levels. Which of two equivalent existing helpers to call.
 Test-level choices: fixture shape, table-driven versus separate cases, where a test
 file lives. The order of independent steps within a stage.
 
-**Tier 2 — substantive behaviour.** Strict versus lenient type validation, such as
-rejecting a non-boolean JSON value rather than coercing it. Evaluation or
+**Significant — substantive behaviour.** Strict versus lenient type validation,
+such as rejecting a non-boolean JSON value rather than coercing it. Evaluation or
 short-circuit ordering in a filter or query. An addition to a public surface, even
 a non-breaking one. Fallback behaviour when an optional service or config is
 absent.
 
-Both get decided without stopping. Tier 2 gets walked through one at a time at
-cleanup; Tier 1 gets confirmed in a batch. When in doubt between the tiers, mark it
-Tier 2 — that only costs the user a paragraph to read.
+**Always at least Significant:** anything that touches logging, masking, or
+retention of user data — what reaches a log, how an identifier is masked, how long
+something is kept — and any choice to leave a known defect unfixed or deferred
+rather than fix it. Measured runs filed both kinds as routine conventions; neither
+was. A call that meets the Major criteria above is still Major.
 
-## When you cannot tell whether it is minor at all
+Both levels get decided without stopping. A Minor decision is logged as one line
+and confirmed automatically — the user can reopen any of them at cleanup; each
+Significant one is reviewed at cleanup. When in doubt, mark it Significant — that
+only costs the user a paragraph to read.
 
-If you are still weighing whether a call is minor after a moment's thought, it is
-major. The asymmetry is the whole reason to have a rule: a wrong minor decision
-costs an edit, and a wrong major decision costs every stage built on top of it.
+## When you cannot tell whether to decide it at all
 
-But do not launder a major decision into a minor one by making it configurable. A
-schema choice behind a feature flag is still a schema choice.
+If you are still weighing whether to decide a call autonomously at all after a
+moment's thought, it is Major. The asymmetry is the whole reason to have a rule: a
+wrong autonomous decision costs an edit, and a wrong Major decision costs every
+stage built on top of it.
 
-## Every minor decision must stay changeable
+But do not launder a Major decision into an autonomous one by making it
+configurable. A schema choice behind a feature flag is still a schema choice.
 
-When a minor decision is taken, it must land in the code as **one named place to
-change**, and the log entry must say where that place is:
+## Every autonomous decision must stay changeable
+
+When an autonomous decision is taken, it must land in the code as **one named
+place to change**, and the log entry must say where that place is:
 
 - a named constant rather than a literal repeated at three call sites,
 - a default parameter value rather than a hard-coded argument,
@@ -240,38 +253,54 @@ It exists so the user can audit an unattended run afterwards, at
 
 The `stage-runner` writes the entries for its own stage as it receives them, so the
 log stays complete even if a run dies mid-stage. It also writes the entries for
-decisions **you** take: when you answer a minor question, quote your answer in the
-re-delegation and tell the runner to log it with `Decided by: orchestrator`. You
-never open the log yourself. Create the file if it is absent:
+decisions **you** take: when you answer an autonomous question, quote your answer
+in the re-delegation and tell the runner to log it with `Decided by: orchestrator`.
+You never open the log yourself, and no subagent reads the whole of it: the runner
+finds the next ID with a grep and appends. Create the file if it is absent:
 
 ```markdown
 # Decisions — <feature>
 
 Decisions taken without asking during development. Each is meant to be cheap to
-change; the "Change it here" line says where.
+change; the "Change it here" line, or a Minor line's fourth field, says where.
 
-Tier 1 is a routine convention; Tier 2 shapes behaviour or a contract.
+Minor is a routine convention: one line, confirmed automatically, reopened only on
+request. Significant shapes behaviour or a contract: a full entry, reviewed one by
+one at cleanup. IDs run in one sequence across both.
 Status is `unconfirmed`, `confirmed`, `rejected`, `deferred`, or `modified: <details>`.
+
+## Minor decisions
 ```
 
-Entries look like this, numbered in order across the whole feature:
+IDs run in one sequence across the whole feature and both levels. A **Minor**
+decision is one line under `## Minor decisions` — ID, title, decision, where to
+change it, and status, which starts as `confirmed`:
 
 ```markdown
-## D07 — Retry budget for the fetch helper
+- D07 · Retry budget · 3 attempts, exponential backoff · src/net/fetch.ts:12 · confirmed
+```
+
+A **Significant** decision is a full entry, starting `unconfirmed`:
+
+```markdown
+## D08 — Lenient boolean parsing for config flags
 
 - **Stage:** 03-fetch-retry
-- **Tier:** 1
+- **Level:** Significant
 - **Decided by:** implementer
-- **The call:** how many times to retry a failed fetch before giving up
-- **Decision:** 3 attempts with exponential backoff
-- **Instead of:** a single attempt, or a caller-supplied count
-- **Tradeoffs & implications:** a slow endpoint now costs up to 3x the latency
-  before surfacing an error; callers cannot opt out without a code change
-- **Because:** the criterion says "retries transient failures" and names no number;
-  3 matches `uploadWithRetry` in src/net/upload.ts:44
-- **Change it here:** `MAX_FETCH_ATTEMPTS` in src/net/fetch.ts:12
+- **The call:** whether a non-boolean JSON value for `retry` is rejected or coerced
+- **Decision:** coerce `"true"`/`"false"` strings; reject anything else
+- **Instead of:** rejecting every non-boolean, or coercing any truthy value
+- **Tradeoffs & implications:** hand-edited configs keep working; a typo such as
+  `"ture"` is still an error, but `"false"` no longer is
+- **Because:** the criterion says "accepts the documented config" and the README
+  example quotes its booleans
+- **Change it here:** `parse_flag` in src/config.ts:40
 - **Status:** unconfirmed
 ```
+
+Logs written before 1.5.0 hold full entries marked `**Tier:** 1` or `**Tier:** 2`.
+They stay as they are: Tier 1 reads as Minor, Tier 2 as Significant.
 
 ---
 
@@ -289,7 +318,7 @@ the block to its own prompts for `stage-architect` and `implementer`.
 This is running unattended. Nobody will answer you mid-task, so a question you
 raise costs the whole run a stop.
 
-**Stop and report, as you normally would, when the call is major:** it changes
+**Stop and report, as you normally would, when the call is Major:** it changes
 scope or acceptance criteria; it is not cheaply reversible (data model, schema,
 migration, on-disk or wire format, public API or CLI surface, new dependency,
 removal of existing behaviour); it touches auth, permissions, credentials, secrets,
@@ -298,32 +327,37 @@ a convention you would have to repeat across many files; or two readings of the
 spec lead to materially different work. Stopping on one of these is the right
 outcome and is not a failure.
 
-**Decide it yourself when the call is minor**, and classify it:
+**Otherwise decide it yourself**, and give it a level:
 
-- **Tier 1 — routine conventions:** naming, placement inside an existing pattern, a
+- **Minor — routine conventions:** naming, placement inside an existing pattern, a
   default value or threshold, message wording, which of two equivalent existing
   helpers to use, test layout and fixture shape, the order of independent steps.
-- **Tier 2 — substantive behaviour:** strict versus lenient validation, evaluation
-  or short-circuit ordering, an addition to a public surface, fallback behaviour
-  when something optional is absent.
+- **Significant — substantive behaviour:** strict versus lenient validation,
+  evaluation or short-circuit ordering, an addition to a public surface, fallback
+  behaviour when something optional is absent.
+- **At least Significant, always:** anything that touches logging, masking, or
+  retention of user data, and any choice to leave a known defect unfixed or
+  deferred.
 
-If you are still weighing whether it is minor at all after a moment, it is major.
-If you are weighing which tier, it is Tier 2.
+If you are still weighing whether to decide it autonomously at all after a moment,
+it is Major. When in doubt, mark it Significant.
 
-**A minor decision must land as one named place to change** — a named constant, a
-default parameter, a single config key — not a literal repeated across call sites.
-Do not build an abstraction, interface, or settings system to hold it; one named
-place is the whole requirement.
+**An autonomous decision must land as one named place to change** — a named
+constant, a default parameter, a single config key — not a literal repeated across
+call sites. Do not build an abstraction, interface, or settings system to hold it;
+one named place is the whole requirement.
 
-End your report with this section, exactly this shape, so it can be transcribed
-into the run's decision log:
+End your report with this section, exactly this shape — one line for each Minor
+decision, the full fields for each Significant one — so it can be transcribed into
+the run's decision log:
 
 ```
 ## Autonomous decisions
 
-- **D01 — <short title>**
+- D01 · <short title> · <what you chose> · <file:line — the constant, default, or key>
+- **D02 — <short title>**
+  **Level:** Significant
   **The call:** <what was genuinely undecided>
-  **Tier:** 1 | 2
   **Decision:** <what you chose>
   **Instead of:** <the alternatives>
   **Tradeoffs & implications:** <what this costs, and what it constrains later>
@@ -356,10 +390,12 @@ So the run stays lean by never loading that material, not by dropping it later:
 
 - **Each stage's context comes from `handoff.py`, not from you.** The stage-runner
   runs it and gets `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, this feature's
-  `architecture.md`, the full report of the **immediately previous** stage — no
-  earlier reports — and that stage's contract and detail files, straight from
-  disk. `architecture.md` and the previous report are rewritten and written by the
-  stage before, so the context is always current without you reading anything.
+  `architecture.md`, the **immediately previous** stage's commit and its
+  *Behaviour as built* and *Superseded* sections — no earlier reports, and none of
+  the rest of that one, which `architecture.md` already covers — and this stage's
+  contract and detail files, straight from disk, in one file it Reads once.
+  `architecture.md` and the previous report are rewritten and written by the stage
+  before, so the context is always current without you reading anything.
 - **The bookkeeping is the runner's.** It transcribes every decision into
   `DECISIONS.md`, writes the report, and rewrites `architecture.md`. You never open
   any of them.
@@ -392,7 +428,7 @@ Resolve it once, at the start of the run:
 
 - **It names a branch that exists** → check it out if you are not on it. Create
   nothing.
-- **It names a branch that does not exist** → major. Stop and ask. Someone deleted
+- **It names a branch that does not exist** → Major. Stop and ask. Someone deleted
   or renamed it; do not silently branch from wherever HEAD happens to be.
 - **It says `(not created yet)`, or the line is missing** → resolve it from the
   repo state:
@@ -415,7 +451,7 @@ Resolve it once, at the start of the run:
 
   - **It does not exist** → create it from the current HEAD with
     `git checkout -b <feature>`.
-  - **It already exists** → **major. Stop and ask the user whether to reuse it**,
+  - **It already exists** → **Major. Stop and ask the user whether to reuse it**,
     showing what is already on it (`git log --oneline "$DEFAULT"..<feature>`).
     Reusing someone else's branch is not cheaply reversible, so it is not a call
     `yolo` makes on its own. Do not check it out, reset it, or invent a variant
@@ -454,7 +490,7 @@ reset it — the user needs to see what actually happened.
 
    - If `$ARGUMENTS` contains a goal and no plan exists for it, run the planning
      conversation first: this is exactly the `plan` flow, and the user approving
-     the plan is a major gate that `yolo` does not skip. Delegate to
+     the plan is a Major gate that `yolo` does not skip. Delegate to
      `staged-build:plan-architect`, which writes the plan to
      `specs/<feature>/`; put the summary, its questions, and the stage list to the
      user; iterate until they approve. Then continue into the loop below.
@@ -463,14 +499,14 @@ reset it — the user needs to see what actually happened.
    - Resolve the branch as above. In a repo with neither git nor jj, ask the user
      whether to proceed with no version control; do not assume.
    - Create `DECISIONS.md` and `SESSION_STATE.json` if absent, and ensure
-     `.gitignore` contains `specs/**/scratchpad/`.
+     `.gitignore` contains `specs/**/scratchpad/` and `specs/**/.handoff-*`.
    - Put every pending stage into TodoWrite, one todo each, so the user can watch
      an unattended run from outside it.
 
 2. **Loop.** Take the first row in STATE.md that is not `done` and run it:
 
    a. **Check the tree.** `git status --porcelain -- ':!specs'` must be clean.
-      Changes under `specs/` are expected. Anything else dirty is major: stop. In a
+      Changes under `specs/` are expected. Anything else dirty is Major: stop. In a
       jj repo, `jj new -m "<feature>-stage-NN: <title>"`.
 
    b. **Mark the row `in-progress`** in STATE.md.
@@ -484,7 +520,7 @@ reset it — the user needs to see what actually happened.
       - the handoff command it runs first:
 
         ```sh
-        python3 <handoff script> --feature <feature> --stage NN --role stage-architect [--include <path> ...]
+        python3 <handoff script> --feature <feature> --stage NN --role stage-architect --out [--include <path> ...]
         ```
 
         The stage files do not exist yet — the runner's own stage-architect writes
@@ -494,7 +530,9 @@ reset it — the user needs to see what actually happened.
         before delegating.
       - one `--include` for each completed feature this stage integrates with —
         `specs/<other-feature>/architecture.md` — and for any investigation
-        findings file an earlier stage wrote for this one to build on
+        findings file an earlier stage wrote for this one to build on. Pass a file
+        only to the stages that need it, not to every stage by default, and never
+        to a cleanup stage unless its brief needs it.
       - any answer of yours or the user's the stage depends on, quoted verbatim,
         with an instruction to log yours as `Decided by: orchestrator`
       - the unattended addendum above, verbatim
@@ -512,15 +550,15 @@ reset it — the user needs to see what actually happened.
 
       **This is the one place `yolo` deliberately contradicts `next`: it
       auto-continues.** Do not stop between stages, do not ask whether to carry on,
-      and do not report a summary and wait. Stop only for a major issue, or when
+      and do not report a summary and wait. Stop only for a Major issue, or when
       nothing is pending.
 
-   e. **On `STATUS: REPLANNED`** → major. Mark the stage `blocked` in STATE.md,
+   e. **On `STATUS: REPLANNED`** → Major. Mark the stage `blocked` in STATE.md,
       show the contradiction in the subagent's own words, and stop.
 
-   f. **On `STATUS: HALTED`** → major. Stop and report, as described below.
+   f. **On `STATUS: HALTED`** → Major. Stop and report, as described below.
 
-   g. If a row is already `blocked`, that is major — stop and explain why it is
+   g. If a row is already `blocked`, that is Major — stop and explain why it is
       blocked rather than running it.
 
 3. **When no stage is pending**, the implementation is done but the run is not: the
@@ -559,15 +597,15 @@ not say so. The temptation to round up is stronger here than anywhere else in th
 plugin, because rounding up keeps the run going — which is exactly why it is
 forbidden.
 
-**When you stop on a major issue**, say: which stage, which step of the pipeline,
+**When you stop on a Major issue**, say: which stage, which step of the pipeline,
 what the issue is in the subagent's own words, what you need from the user, and
 what state the tree is in (committed through stage NN, plus whatever is
 uncommitted). Then stop. Do not offer to work around it.
 
 **When the run finishes**, give: the stages completed and their commits, the branch
-they are on, the decision count by tier — summed from the runners' payloads, or
-counted with `grep -cE` on `DECISIONS.md` if the run resumed after a `/clear`, never
-by reading the log — how many stages needed a relay or a fix
+they are on, the decision count by level, Minor and Significant — summed from the
+runners' payloads, or counted with `grep -cE` on `DECISIONS.md` if the run resumed
+after a `/clear`, never by reading the log — how many stages needed a relay or a fix
 cycle, anything the verifier flagged and was accepted as non-blocking, the fact
 that nothing was pushed, and the two follow-up commands — noting that
 `/staged-build:cleanup` is also what finalises `specs/<feature>/architecture.md`.

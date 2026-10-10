@@ -41,6 +41,11 @@ Read the source only to settle a contradiction between the file and the code in
 front of you — and if you find one, say so in your report, because a stale
 `architecture.md` misleads every stage after this one.
 
+**Never read `DECISIONS.md`.** An earlier decision you need reaches you through the
+contract, the detail file, or `architecture.md`, whose section 5 lists every named
+constant and config key a decision landed as. The log is the stage-runner's to
+write and the user's to review; reading it costs every turn after it.
+
 ## Stop instead of improvising
 
 Stop and report if any of these is true:
@@ -143,7 +148,7 @@ names a helper and gives its signature, you decide the body. Where it names a te
 case and says what it asserts, you write the test. Where it is more specific than
 you would have been, follow it — it was written by someone who read the surrounding
 code. Where it is silent on something genuinely local, decide and move on; that is
-a minor decision, not the ambiguity the stop rule is about.
+an autonomous decision, not the ambiguity the stop rule is about.
 
 ## Scope
 
@@ -171,7 +176,7 @@ ugly. What it must never be is mixed into the project: no probe scripts left in
 `src/`, no scratch fixtures committed beside real ones, no internals exposed
 publicly just to make a temporary check possible.
 
-## Minor decisions
+## Autonomous decisions
 
 When you hit a judgement call that is genuinely local — naming, placement inside an
 existing pattern, a default value or timeout, message wording, which of two
@@ -183,20 +188,23 @@ decide it yourself rather than stopping. Then:
   abstraction, interface, or settings system built to hold it. One named place is
   the whole requirement; over-engineering a small decision is itself a decision
   nobody asked for.
-- **Classify it.** **Tier 1** is a routine convention: naming, placement, a default
-  constant, test layout, a log message, a CLI flag alias. **Tier 2** shapes
-  behaviour or a contract: strict versus lenient validation, evaluation or
+- **Give it a level.** **Minor** is a routine convention: naming, placement, a
+  default constant, test layout, a log message, a CLI flag alias. **Significant**
+  shapes behaviour or a contract: strict versus lenient validation, evaluation or
   short-circuit ordering, an addition to a public surface, fallback behaviour when
-  something optional is absent.
+  something optional is absent. Anything that touches logging, masking, or
+  retention of user data, and any choice to leave a known defect unfixed or
+  deferred, is **at least Significant**. When in doubt, mark it Significant.
 - **Report it**, so it reaches `DECISIONS.md` and the user can review it later.
 
-Stop and report instead when the call is **major**: scope or acceptance criteria;
+Stop and report instead when the call is **Major**: scope or acceptance criteria;
 anything not cheaply reversible (data model, schema, migration, on-disk or wire
 format, public API or CLI surface, a new dependency, removing existing behaviour);
 auth, permissions, credentials, secrets, billing, or user data; anything
 destructive or reaching outside this repository; or a convention you would have to
-repeat across many files. If you are still weighing which it is after a moment, it
-is major.
+repeat across many files. If you are still weighing whether to decide it
+autonomously at all after a moment, it is Major — a call that meets these criteria
+stays Major whatever level it would otherwise get.
 
 ## Verify your own work
 
@@ -257,20 +265,24 @@ pass — do not overwrite an earlier pass's evidence):
 - What you deliberately left out, and why.
 - Concerns worth a closer look.
 - On a fix pass: what you reproduced, the root cause, and what you changed.
-- Your autonomous decisions:
+- Your autonomous decisions — one line for each Minor decision, the full fields for
+  each Significant one:
 
 ```markdown
 ## Autonomous decisions
 
-- **D01 — <short title>**
+- D01 · <short title> · <what you chose> · <file:line — the constant, default, or key>
+- **D02 — <short title>**
+  **Level:** Significant
   **The call:** <what was genuinely undecided>
-  **Tier:** 1 | 2
   **Decision:** <what you chose>
   **Instead of:** <the alternatives>
   **Tradeoffs & implications:** <what this costs, and what it constrains later>
   **Because:** <one line of rationale>
   **Change it here:** <file:line — the constant, default, or key that holds it>
 ```
+
+If you took none, write the heading followed by `none`.
 
 ### 2. Return a compact payload
 
@@ -281,15 +293,15 @@ is already on disk, which is the entire reason you wrote it there.
 ```yaml
 STATUS: PASS | FAIL | REPLANNED | RELAY_REQUIRED
 FILES_MODIFIED: [path/to/file1, path/to/file2]
-DECISION_IDS: [D01 (Tier 1), D02 (Tier 2)]
+DECISION_IDS: [D01 (Minor), D02 (Significant)]
 SUMMARY: <1-2 sentences on what landed>
 ```
 
 `DECISION_IDS` carries **references, not decisions.** Number the entries in your
 report's `## Autonomous decisions` section `D01`, `D02`, … and list those IDs with
-their tiers here. The stage-runner reads the full entries off the report on disk
+their levels here. The stage-runner reads the full entries off the report on disk
 and renumbers them across the feature when it transcribes them into `DECISIONS.md`,
-so the call, the alternatives, the tradeoffs, and the rationale never travel
+so the decision, the alternatives, the tradeoffs, and the rationale never travel
 through your return message. If you took none, write `DECISION_IDS: []`.
 
 `STATUS` means:

@@ -33,10 +33,11 @@ a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history.
 anything from its own context — only your `/clear` can — so the root stays small by
 never reading stage material in the first place. Instead of pasting `SPEC.md`,
 `architecture.md`, the previous report, and the stage files into a delegation
-prompt, it hands the subagent a `scripts/handoff.py` command, and the subagent runs
-it to print exactly its role's bundle from disk. The root holds the stage table,
-the payloads, its conversation with you, and in `next` a short approval summary.
-See [The handoff](#the-handoff).
+prompt, it hands the subagent a `scripts/handoff.py --out` command, and the
+subagent runs it to write exactly its role's bundle from disk to one file, then
+Reads that file once. The root holds the stage table, the payloads, its
+conversation with you, and in `next` a short approval summary. See
+[The handoff](#the-handoff).
 
 **Subagents write evidence to disk, not into the chat.** Every role has a return
 budget — `implementer` and `stage-architect` ≤350 tokens, `verifier` ≤300,
@@ -60,7 +61,8 @@ and *in what order*, and settles it with you. The stage-architect then works out
 *how*, one stage at a time — so a stage's spec is written after the stages before
 it have actually landed, informed by what the code really became rather than by
 what the plan predicted. For stage N > 1 it is given the feature's current
-`architecture.md` and the full report of the stage just before it as ground truth,
+`architecture.md` and the *Behaviour as built* and *Superseded* sections of the
+stage just before it as ground truth,
 which is what stops stage 05 from being specified against an interface stage 03
 never built.
 
@@ -69,11 +71,12 @@ besides what changed, the **Behaviour as built** — the rules that actually lan
 as invariants — and what it **Superseded**. On a pass, the stage-runner then
 rewrites `specs/<feature>/architecture.md` — entrypoints, module map, public API and
 CLI contracts, invariants, config keys with their `file:line`, and the test command
-— from the previous version, that report, `DECISIONS.md`, and
-`SESSION_STATE.json`, and commits it with the stage. Never by re-reading the source,
-which would make the documentation step the token sink it exists to prevent. So the
-next stage gets that one current page plus the previous report, rather than a
-fragment from every stage before it. `/staged-build:cleanup` finalises the file,
+— from the previous version, that report, the decisions that stage logged, and
+`SESSION_STATE.json`, and commits it with the stage. Never by re-reading the source
+or the whole decision log, which would make the documentation step the token sink
+it exists to prevent. So the next stage gets that one current page plus the
+previous report's *Behaviour as built* and *Superseded*, rather than a fragment from
+every stage before it. `/staged-build:cleanup` finalises the file,
 and later features and maintenance sessions read it instead of grepping the tree:
 `SPEC.md` predates the code and has drifted, and the stage reports are the truth in
 fifteen fragments.
@@ -138,6 +141,13 @@ matching entry in `.claude-plugin/marketplace.json`, or reinstall:
 
 ```bash
 claude plugin uninstall staged-build && claude plugin install staged-build@staged-build
+```
+
+The scripts' tests use synthetic transcripts and need nothing beyond the standard
+library; they run under pytest too:
+
+```bash
+python3 -m unittest discover -s tests
 ```
 
 ### Names after install
@@ -211,7 +221,8 @@ If the implementer concludes the *stage spec* was wrong rather than the code, it
 returns `REPLANNED` — the stage is marked `blocked` and the pipeline stops
 immediately so you can look at the plan.
 
-Minor decisions taken along the way are logged to `DECISIONS.md` in `next` too, not
+Autonomous decisions taken along the way — Minor and Significant, as described
+under [`yolo`](#staged-buildyolo) — are logged to `DECISIONS.md` in `next` too, not
 just in `yolo`. That keeps the flow moving without stopping on a variable name, and
 leaves the audit trail for `/staged-build:cleanup`.
 
@@ -240,7 +251,7 @@ stage still starts its own change and bookmarks are left alone.
 
 ### `/staged-build:stage status`
 
-The stage table, the branch, the session state, a decision summary by tier and
+The stage table, the branch, the session state, a decision summary by level and
 status, what's in the scratchpad, whether `architecture.md` exists and which stage
 last updated it, and the latest stage report. Changes nothing.
 
@@ -265,27 +276,41 @@ stops at a stage boundary and tells you to `/clear` and run `/staged-build:yolo`
 again, which resumes from `STATE.md` with a clean slate.
 
 **It decides small things itself.** Every judgement call a subagent hands back is
-triaged as major or minor. Minor is naming, placement, a default value, message
-wording, which of two equivalent helpers to call — it decides, writes it down, and
-carries on. Major stops the run and asks you: anything that changes scope or
+triaged as Major or autonomous. An autonomous call — naming, placement, a default
+value, message wording, which of two equivalent helpers to call, a validation rule
+— gets decided, written down, and the run carries on. Major stops the run and asks
+you: anything that changes scope or
 acceptance criteria, anything not cheaply reversible (data model, schema,
 migration, on-disk or wire format, public API, new dependency), anything touching
 auth, credentials, billing, or user data, anything destructive or outward-facing,
 and any convention you haven't set. The pipeline's own stop conditions — the
 implementer stopping, a `REPLANNED`, verification still failing after 2 fix cycles
-— are always major.
+— are always Major.
 
-If it's still weighing which one a call is, it treats it as major. A wrong minor
-decision costs an edit; a wrong major one costs every stage built on top of it.
+If it's still weighing whether to decide a call autonomously at all, it treats it
+as Major. A wrong autonomous decision costs an edit; a wrong Major one costs every
+stage built on top of it.
 
-**Minor decisions come in two tiers.** Tier 1 is a routine convention — a name, a
-default, a log message, where a test file goes. Tier 2 shapes behaviour or a
-contract — strict versus lenient validation, evaluation ordering, an addition to a
-public surface, fallback behaviour when something optional is absent. Both get
-decided without stopping; the tier decides how much of your attention each gets
-back at cleanup.
+**Autonomous decisions come in two levels.** **Minor** is a routine convention — a
+name, a default, a log message, where a test file goes — logged as one line and
+confirmed automatically:
 
-**Every minor decision stays changeable.** It has to land as one named place to
+```
+- D07 · Retry budget · 3 attempts, exponential backoff · src/net/fetch.ts:12 · confirmed
+```
+
+**Significant** shapes behaviour or a contract — strict versus lenient validation,
+evaluation ordering, an addition to a public surface, fallback behaviour when
+something optional is absent — and gets a full entry you review at cleanup.
+Anything touching logging, masking, or retention of user data, or leaving a known
+defect unfixed or deferred, is at least Significant, and when in doubt it is
+Significant. Minor decisions are still logged, as an audit trail and so a
+misfiled one can be caught.
+
+Logs from before 1.5.0 call these Tier 1 (now Minor) and Tier 2 (now Significant),
+with a `**Tier:**` field where entries now have `**Level:**`; both are read as-is.
+
+**Every autonomous decision stays changeable.** It has to land as one named place to
 change — a named constant, a default parameter, a single config key — and the log
 records that `file:line`. One named place, not an abstraction layer: over-building
 a small decision is itself a decision you didn't ask for.
@@ -296,7 +321,7 @@ a small decision is itself a decision you didn't ask for.
 ```
 
 Given a goal with no plan, it runs the normal planning conversation first. That
-gate isn't skipped: approving the plan is the most major decision there is.
+gate isn't skipped: approving the plan is the first Major decision of any run.
 
 When the last stage passes it points you at `/staged-build:cleanup`.
 
@@ -305,14 +330,14 @@ When the last stage passes it points you at `/staged-build:cleanup`.
 **One branch, and it commits.** If `STATE.md` already names a branch it uses that.
 Otherwise it adopts the branch you're on when that branch is a *clean new branch* —
 not the default branch, nothing dirty outside `specs/`, no commits of its own — and
-creates `<feature>` when it isn't. If `<feature>` already exists, that's a major
+creates `<feature>` when it isn't. If `<feature>` already exists, that's a Major
 decision: it stops and asks whether to reuse it. Either way it records the name and
 tells you which happened. It never builds a stage on `main`.
 
 Then one commit per stage, each message prefixed `<feature>-stage-NN: `. It never
 creates a second branch, never deletes one, and never merges, rebases, or pushes —
 pushing is outward-facing, so it's outside what `yolo` authorizes even when the
-branch has a remote. If the run stops on a major issue, the tree is left exactly as
+branch has a remote. If the run stops on a Major issue, the tree is left exactly as
 it is rather than tidied up.
 
 #### What the judge doesn't see
@@ -329,21 +354,27 @@ The last stage of a feature: you find out what was decided in your absence and s
 whether you agree.
 
 It **starts in a fresh context** loaded only from disk — the session state, the
-spec, the stage table, the decision log, and a listing of the scratchpad. That
-reset is the reason it's a separate command rather than the tail of `yolo`: a
-twenty-stage run leaves a transcript that would swamp the review, and none of it is
-needed to ask whether you agree with a decision.
+spec, the stage table, a grep index of the decision log, and a listing of the
+scratchpad. That reset is the reason it's a separate command rather than the tail
+of `yolo`: a twenty-stage run leaves a transcript that would swamp the review, and
+none of it is needed to ask whether you agree with a decision. If the session has
+already grown by 25k tokens or more, it says so and recommends `/clear` first.
 
 Then:
 
-- **Tier 1 in one batch.** Every routine decision in a single table, with one
-  question: confirm all of them, or pick any you want to look at.
-- **Tier 2 one at a time.** For each: the problem, what was decided and the
-  `file:line` that holds it, and the tradeoffs. You can confirm, reject, defer, ask
-  a follow-up, or ask for a modification.
+- **Minor, for information.** Every routine decision in a single table, confirmed
+  without a question. Name any ID to reopen it. A Minor decision that touches
+  logging, masking, or retention of user data, or leaves a defect unfixed, is moved
+  to the Significant review instead.
+- **Significant, in batches of four.** For each: the problem, what was decided and
+  the `file:line` that holds it, and the tradeoffs — then one question per decision:
+  confirm, reject, defer, or modify, or type a follow-up. Only the unconfirmed
+  Significant entries are read in full, and each batch's answers are written in the
+  same turn as the next batch's question.
 - **A real cleanup stage.** If anything was rejected or modified, or if the
-  scratchpad still exists, it appends a stage to `STATE.md` and runs it through the
-  normal pipeline — stage-architect, implementer, verifier, commit. The verifier
+  scratchpad still exists, it commits the review, appends a stage to `STATE.md`, and
+  runs it through the normal pipeline — stage-architect, implementer, verifier,
+  commit. The verifier
   confirms the remediations landed, the scratchpad is gone, and the tests still
   pass.
 - **`architecture.md`, last.** Once the remediation has landed and the scratchpad
@@ -375,7 +406,17 @@ It also audits the pipeline's own invariants, and this is the part worth running
   thrashing on.
 
 It also reports which features have an `architecture.md`, and says so when a
-completed feature is missing one.
+completed feature is missing one; the decision count as Minor and Significant with
+their statuses; and a **cost weighting** per role — the share of cache reads, cache
+writes, and input/output, since cache reads are billed at a fraction of the rest.
+
+Token counts are per API message: Claude Code writes one transcript record per
+content block and repeats the message's usage on each, so each `message.id` counts
+once, including across a forked session. A session counts toward the feature only
+if it ran a `/staged-build:*` command, has a staged-build subagent, or is on the
+feature's branch — and mentions the feature, without having evidently worked on a
+different one. Sessions that mention the feature but don't qualify are listed under
+**Excluded sessions** with their token totals.
 
 Run it whenever a stage feels slow, not only at the end; `yolo` and `next` will
 suggest it themselves if a stage exceeds ~15 minutes or 2 fix cycles.
@@ -393,22 +434,31 @@ python3 scripts/analyze_tokens.py --repo . --feature search-index
 
 ## The handoff
 
-`scripts/handoff.py` prints one role's context bundle for a stage, with a
+`scripts/handoff.py` builds one role's context bundle for a stage, with a
 `=== path ===` header before each part, and exits non-zero naming any required file
 that is missing. Standard library only.
 
 ```bash
-python3 scripts/handoff.py --feature <slug> --stage <NN> --role <stage-architect|stage-runner|approval> [--include <path> ...] [--check]
+python3 scripts/handoff.py --feature <slug> --stage <NN> --role <stage-architect|stage-runner|approval> [--out [PATH]] [--include <path> ...] [--full-previous-report] [--check]
 ```
 
-| Role | Prints |
+With `--out`, which is what the commands use, it writes the bundle to
+`specs/<feature>/stages/.handoff-NN-<role>.md` (or `PATH`) and prints only the
+path and a manifest of the parts with approximate token counts; the agent Reads the
+file once. Printed to stdout instead, a 10–16k-token bundle overflows Claude Code's
+Bash output limit, gets saved to a file anyway, and costs the agent a 2KB preview
+plus an extra Read. Add `specs/**/.handoff-*` to `.gitignore` — the commands do —
+and the stage-runner's commit leaves the bundles out regardless.
+
+| Role | Bundle |
 |---|---|
-| `stage-architect` | `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, the feature's `architecture.md`, and the full report of the previous stage. The last two are optional for the first stage — a one-line note stands in. A feature with no `architecture.md` yet gets every earlier report's Summary and Changes instead. |
+| `stage-architect` | `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, the feature's `architecture.md`, and the previous stage's report trimmed to its `**Commit:**` line, *Behaviour as built*, and *Superseded* — `architecture.md` carries the rest; `--full-previous-report` includes all of it. The last two are optional for the first stage — a one-line note stands in. A feature with no `architecture.md` yet gets every earlier report's Summary and Changes instead. |
 | `stage-runner` | The `stage-architect` bundle plus `NN-slug.md` and `NN-slug.detail.md`. |
 | `approval` | Only what `next` shows you before running a stage: the contract's acceptance criteria, verification command, and files expected to change; the detail file's test plan and `[large]` step titles; and its `## Autonomous decisions`. |
 
 `--include` adds a file, such as another feature's `architecture.md` or an
-investigation's findings. `--check` prints `ok` or the missing files and nothing
+investigation's findings — pass one only to the stages that need it, not to every
+stage by default. `--check` prints `ok` or the missing files and nothing
 else; the orchestrator runs it before every delegation, so no subagent is ever
 handed a path that does not exist.
 
@@ -427,6 +477,10 @@ How the roles use it:
   before, and `architecture.md` by path. On a pass it transcribes the architect's
   decisions into `DECISIONS.md` before rewriting `architecture.md`. The verifier
   still gets only the contract and the diff.
+- **No agent reads the whole `DECISIONS.md`.** The stage-runner finds the next ID
+  with a grep and appends, and rewrites `architecture.md` from the previous version
+  plus this stage's new entries. The implementer and stage-architect never open the
+  log; a decision they need reaches them through the contract or `architecture.md`.
 
 Subagents run the script with `python3`, so allow it — `Bash(python3:*)` — or
 expect a prompt per delegation.
@@ -440,7 +494,7 @@ specs/<feature>/
   architecture.md                # updated every stage, finalised by cleanup: the system reference
   SPEC.md                        # goal, context, approach, stages, non-goals
   STATE.md                       # the stage table, and the feature's Branch: line
-  DECISIONS.md                   # decisions taken without asking, with tiers
+  DECISIONS.md                   # decisions taken without asking: Minor one-liners, Significant in full
   SESSION_STATE.json             # test command, runtime, and other environment facts
   scratchpad/                    # one-off throwaway verification code (gitignored)
   tokens_efficiency_report.md    # written by analyze-tokens
@@ -451,6 +505,7 @@ specs/<feature>/
     01-slug.wip.md               # relay checkpoint, if the implementer needed one
     01-slug.report.md            # evidence, and what actually landed
     01-slug.verification.log     # the verifier's raw command output, kept off every context
+    .handoff-01-<role>.md        # a role's context bundle from handoff.py --out (gitignored)
 ```
 
 `SPEC.md`, `STATE.md`, `DECISIONS.md`, and `SESSION_STATE.json` are written by the
@@ -460,7 +515,7 @@ the plan predicted it would.
 
 **`architecture.md` is the cure for the exploration tax.** The stage-runner
 rewrites it after every passing stage, from metadata already verified on disk — the
-previous version, that stage's report, the decision log, and `SESSION_STATE.json` —
+previous version, that stage's report, the decisions it logged, and `SESSION_STATE.json` —
 and `cleanup` finalises it. It always describes the code as of the latest `done`
 stage. About a page: entrypoints, module map, public API and CLI contracts, invariants and data
 flow, an exhaustive table of config keys and named constants with their `file:line`,

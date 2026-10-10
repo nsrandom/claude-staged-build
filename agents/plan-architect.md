@@ -113,16 +113,20 @@ Branch: <feature> (not created yet)
 
 #### `specs/<feature>/DECISIONS.md`
 
-Initialise the log so the first minor decision has somewhere to go:
+Initialise the log so the first autonomous decision has somewhere to go:
 
 ```markdown
 # Decisions — <feature>
 
 Decisions taken without asking during development. Each is meant to be cheap to
-change; the "Change it here" line says where.
+change; the "Change it here" line, or a Minor line's fourth field, says where.
 
-Tier 1 is a routine convention; Tier 2 shapes behaviour or a contract.
+Minor is a routine convention: one line, confirmed automatically, reopened only on
+request. Significant shapes behaviour or a contract: a full entry, reviewed one by
+one at cleanup. IDs run in one sequence across both.
 Status is `unconfirmed`, `confirmed`, `rejected`, `deferred`, or `modified: <details>`.
+
+## Minor decisions
 ```
 
 #### `specs/<feature>/SESSION_STATE.json`

@@ -1,5 +1,5 @@
 ---
-description: Review the decisions taken without asking, run a cleanup stage for whatever you reject and to clear the scratchpad, then finalise the feature's permanent architecture reference.
+description: Review the decisions taken without asking - Minor ones shown and confirmed, Significant ones asked about in batches - run a cleanup stage for whatever you reject and to clear the scratchpad, then finalise the feature's permanent architecture reference.
 argument-hint: (nothing - use the only feature) | --feature <name>
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, TodoWrite, AskUserQuestion
 model: opus
@@ -24,6 +24,9 @@ user whether they agree with a decision.
 - Is a jj repo: !`test -d .jj && echo yes || echo no`
 - Current git branch: !`git branch --show-current 2>/dev/null || echo "(n/a)"`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
+- Handoff script: !`echo "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py"`
+- Handoff bundles gitignored: !`grep -q 'specs/\*\*/\.handoff-\*' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
+- Context carried in from earlier in this session: !`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/context_check.py" 2>/dev/null || echo "unknown"`
 
 ### Session state
 
@@ -33,9 +36,19 @@ user whether they agree with a decision.
 
 !`cat specs/*/STATE.md 2>/dev/null || echo "(no STATE.md)"`
 
-### Decision log
+### Decision counts
 
-!`cat specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Decisions: !`grep -cE '^(## |- )D[0-9]+' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- Significant (including old `Tier 2`): !`grep -cE '(\*\*Level:\*\* Significant|\*\*Tier:\*\* 2|\(Tier 2)' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
+- By status: !`grep -hoE '(\*\*Status:\*\* |\(Tier [12], |^- D[0-9]+ .*· )[a-z]+' specs/*/DECISIONS.md 2>/dev/null | sed -E 's/.* //' | sort | uniq -c | tr -s ' \n' ' ' || echo "(none yet)"`
+
+### Decision index
+
+The log is never read whole. This is a grep of it: every one-line Minor entry, and
+for every full entry its heading and its level, status, and location lines, each
+with its line number.
+
+!`grep -nE '^- D[0-9]+ ·|^## D[0-9]+|\*\*(Level|Tier|Status|Change it here):\*\*' specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
 
 ### Feature architectures
 
@@ -63,78 +76,110 @@ features exist and none was named, ask which. Never guess.
 **You write no code.** If remediation is needed, it becomes a real stage and goes
 through `staged-build:stage-runner` like every other stage.
 
-If `DECISIONS.md` has no `unconfirmed` entries and there is no `scratchpad/`
-directory, say so — there is nothing to review and nothing to remove. Skip to
-section 6 rather than stopping: the feature's architecture reference still needs
-finalising, or writing if it does not have one yet.
+**Check for a stale context first.** Read the *Context carried in* line above.
+Cleanup assumes a fresh context: it re-sends everything in this conversation on
+every turn of the review. If the line starts with `large`, tell the user, quoting
+it, and recommend a `/clear` before continuing; ask with AskUserQuestion:
+
+- **Stop so I can `/clear`** — stop here, changing nothing. After `/clear`,
+  `/staged-build:cleanup` picks up from disk exactly where it would have now; any
+  statuses already written stay written.
+- **Continue anyway** — carry on.
+
+Ask once. On `fresh`, `small`, or `unknown`, say nothing and carry on.
+
+If the *Decision index* shows no `unconfirmed` entries and there is no
+`scratchpad/` directory, say so — there is nothing to review and nothing to remove.
+Skip to section 6 rather than stopping: the feature's architecture reference still
+needs finalising, or writing if it does not have one yet.
 
 ---
 
-# 1. Sort the decisions by tier
+# 1. Sort the decisions by level
 
-Read `DECISIONS.md` and split the `unconfirmed` entries:
+Work from the *Decision index* above, never from the whole file. Each decision is
+one of two levels:
 
-- **Tier 1 — routine conventions.** Naming, placement inside an existing pattern, a
+- **Minor** — a routine convention: naming, placement inside an existing pattern, a
   default constant or timeout, test layout and fixture shape, a log or error
-  message, a CLI flag alias.
-- **Tier 2 — substantive behaviour.** Strict versus lenient validation, evaluation
-  or short-circuit ordering, an addition to a public surface, fallback behaviour
-  when something optional is absent.
+  message, a CLI flag alias. Logged as one line under `## Minor decisions` — or, in
+  a log from before 1.5.0, as a full entry marked `Tier: 1` / `(Tier 1, …)`.
+- **Significant** — substantive behaviour: strict versus lenient validation,
+  evaluation or short-circuit ordering, an addition to a public surface, fallback
+  behaviour when something optional is absent. A full entry marked
+  `Level: Significant` — or, in an older log, `Tier: 2` / `(Tier 2, …)`.
 
-Most entries carry a `Tier:` line already. Where one is missing or is obviously
-wrong, classify it yourself and say you did. When you are unsure, treat it as
-Tier 2 — that costs the user a paragraph, and the opposite mistake costs them a
-behaviour they never agreed to.
+Where an entry has no level, classify it yourself and say you did. When you are
+unsure, treat it as Significant — that costs the user a paragraph, and the opposite
+mistake costs them a behaviour they never agreed to.
 
-The split is the whole economy of this review: fifteen naming decisions confirmed
-in a single click, and the four that actually shape the software given real
-attention.
+Minor logging exists partly as a safety net against misclassification, so check
+it: **a Minor decision that touches logging, masking, or retention of user data, or
+that leaves a known defect unfixed or deferred, is Significant.** Move each one you
+find to section 3, and say which and why.
 
-# 2. Tier 1: one batch review
+# 2. Minor: confirmed automatically
 
-Present every Tier 1 decision as a single table — ID, title, the call, and the
-`file:line` that holds it — then ask once:
+The user always confirms Minor decisions as they are, so do not ask about them.
+Show every Minor decision as a single table — ID, title, the decision, and the
+`file:line` that holds it, all from the index (an old-format entry's title is its
+heading) — for information. Then:
 
-> *N routine decisions followed existing conventions. Confirm all N, or pick any
-> you want to look at more closely.*
+- Mark any Minor entry that is still `unconfirmed` (older logs only — one-line
+  entries are logged `confirmed`) as `confirmed`, in one write.
+- Say in one line that the user can name any ID to reopen it. If they do, at any
+  point in this review, treat that decision exactly like a Significant one in
+  section 3.
 
-Use AskUserQuestion with `multiSelect: true`, offering "Confirm all N
-(Recommended)" first, and the individual decisions as the other options, in batches
-of four questions if there are many. Say plainly that confirming all of them is a
-fine answer.
+Do not summarise the table into a paragraph. The point is that the user sees each
+one, even though nobody asks them to click.
 
-- Confirmed → mark `confirmed` in `DECISIONS.md`.
-- Picked for a closer look → add to the walkthrough queue below.
+# 3. Significant decisions: in batches
 
-Do not summarise the table into a paragraph. The point of the review is that the
-user sees each one, even the ones they wave through.
+**Read only what is unconfirmed.** For each `unconfirmed` Significant entry — and
+any Minor entry the user reopened or you moved here — Read just that entry: its
+line range from the index, from its `## D` heading to the line before the next one.
+Never load the rest of the log.
 
-# 3. Tier 2 and flagged decisions: one at a time
+Then walk them **in batches of up to four**, one AskUserQuestion call per batch.
 
-Walk the Tier 2 decisions and anything the user flagged, **one at a time**. For
-each, present three things in the log's own words:
+1. **Above the call**, for each decision in the batch, present three things in the
+   log's own words:
 
-- **The problem** — what was genuinely undecided when the code was written.
-- **What was decided** — the choice, and exactly where it lives:
-  `Change it here: path/to/file.ext:line`.
-- **Tradeoffs and implications** — the alternatives passed over, what this costs,
-  and what it constrains later.
+   - **The problem** — what was genuinely undecided when the code was written.
+   - **What was decided** — the choice, and exactly where it lives:
+     `Change it here: path/to/file.ext:line`.
+   - **Tradeoffs and implications** — the alternatives passed over, what this
+     costs, and what it constrains later.
 
-Then offer five options:
+2. **In the call**, each decision is its own question, headed with its ID, with
+   four options — Other is always added, and is how the user asks a follow-up or
+   says something else:
 
-1. **Confirm** — mark `confirmed`.
-2. **Reject** — mark `rejected`, and record what the user wants instead.
-3. **Defer** — add to the deferred queue and come back to it after the pass.
-4. **Ask a follow-up** — answer it, elaborate, then present the same five options
-   again.
-5. **Modify** — mark `modified: <details>` with the adjustment they want.
+   1. **Confirm** — mark `confirmed`.
+   2. **Reject** — mark `rejected`, and record what the user wants instead.
+   3. **Defer** — come back to it after the pass.
+   4. **Modify** — mark `modified: <details>` with the adjustment they want.
 
-Write each status into `DECISIONS.md` as you go, not at the end. If this
-conversation stops halfway, the file must still say exactly where the review got
-to.
+   A follow-up gets answered, and the decision goes into the next batch with the
+   same options. A Reject or Modify that does not say what the user wants goes
+   into the next batch as a question asking exactly that.
 
-When the pass finishes, work through the deferred queue the same way until it is
-empty.
+3. **Write each batch's statuses in the same turn as the next batch's question.**
+   Once the answers come back, send the `DECISIONS.md` edits for that batch and the
+   next batch's AskUserQuestion in one message — the edits first, then the
+   question — rather than one turn per write. Every turn of this review re-sends
+   the whole conversation, so a turn spent on a lone edit is the most expensive
+   kind there is. After the last batch, write its statuses in one turn of their
+   own. Either way the file records every answer before the next question is
+   asked: if this conversation stops halfway, it still says exactly where the
+   review got to.
+
+   Change the `**Status:**` line of a full entry, or the status in the heading of
+   an older `(Tier 2, unconfirmed)` one.
+
+When the pass finishes, work through the deferred ones the same way until none is
+left.
 
 # 4. Decide whether a cleanup stage is needed
 
@@ -162,33 +207,52 @@ and go to section 6.
      temporary artifacts it created outside that directory;
    - that the full test suite must still pass afterwards, with no coverage lost.
 
-3. **Check the tree and the branch.** Same rules as any stage: nothing outside
+3. **Commit the review before the stage starts.** The stage-runner diffs from the
+   commit it starts on, so status edits left uncommitted in `DECISIONS.md` would
+   land in the verifier's diff as unrelated changes it has to be told to ignore —
+   and a verifier told to ignore part of a diff is no longer judging all of it.
+   Commit `DECISIONS.md`, `STATE.md`, and `SPEC.md` now:
+
+   ```sh
+   git add specs/<feature>/DECISIONS.md specs/<feature>/STATE.md specs/<feature>/SPEC.md
+   git commit -m "<feature>-stage-NN: record the decision review"
+   ```
+
+   In a jj repo, `jj describe` the current change with that message and `jj new`.
+
+4. **Check the tree and the branch.** Same rules as any stage: nothing outside
    `specs/` may be dirty, and the run stays on the `Branch:` from `STATE.md` —
    never `main`/`master`. In a jj repo, `jj new -m "<feature>-stage-NN: cleanup"`.
 
-4. **Specify it.** Delegate to `staged-build:stage-architect` with the full text of
-   `SPEC.md` (including the section you just wrote), the new STATE.md row, the full
-   text of `specs/<feature>/architecture.md`, and the full report of the
-   immediately previous stage — exactly the handoff `/staged-build:stage next`
-   uses. If the feature has no `architecture.md`, pass the Summary and Changes
-   sections of the previous stage reports instead. It writes `NN-cleanup.md` and
-   `NN-cleanup.detail.md`.
+5. **Specify it.** Delegate to `staged-build:stage-architect` by path, exactly as
+   `/staged-build:stage next` does: the feature slug, the new stage number and
+   title, and the handoff command to run first —
 
-5. **Show the user the cleanup plan** — the acceptance criteria, the verification
-   command, and the files it will touch — and get their go-ahead, exactly as
-   `/staged-build:stage next` does. Revise via the stage-architect if they want
-   changes.
+   ```sh
+   python3 <handoff script> --feature <feature> --stage NN --role stage-architect --out
+   ```
 
-6. **Run it.** Delegate to `staged-build:stage-runner` with `MODE: supervised`, the
-   approved `NN-cleanup.md` and `NN-cleanup.detail.md`, `SPEC.md`, `STATE.md`,
-   `SESSION_STATE.json`, the routing config, and the same `architecture.md` and
-   previous report (or prior report summaries) the stage-architect got. On
-   `VERDICT: PASS` it rewrites `architecture.md` as it does for every stage.
+   — which writes `SPEC.md` (with the section you just wrote), `STATE.md`,
+   `SESSION_STATE.json`, `architecture.md`, and the previous stage's commit,
+   *Behaviour as built*, and *Superseded* to one file for it to Read. Run it with
+   `--check` first. Add an `--include` only if the brief itself needs another file.
+   It writes `NN-cleanup.md` and `NN-cleanup.detail.md`.
+
+6. **Show the user the cleanup plan** — run the same command with `--role approval`
+   (no `--out`) and show the acceptance criteria, the verification command, and the
+   files it will touch — and get their go-ahead, exactly as
+   `/staged-build:stage next` does. Revise via the stage-architect, with
+   `--role stage-runner --out`, if they want changes.
+
+7. **Run it.** Delegate to `staged-build:stage-runner` with `MODE: supervised`, the
+   feature slug, stage number, title, and slug, the routing config, and the handoff
+   command with `--role stage-runner --out` (checked first). On `VERDICT: PASS` it
+   rewrites `architecture.md` as it does for every stage.
 
    The verifier will confirm the remediations landed, that
    `specs/<feature>/scratchpad/` is gone, and that the test suite still passes.
 
-7. **On `STATUS: PASS`:**
+8. **On `STATUS: PASS`:**
    - Mark the row `done` in `STATE.md`.
    - Update the remediated entries in `DECISIONS.md`:
      `rejected → remediated in stage NN`, `modified → remediated in stage NN`.
@@ -216,9 +280,10 @@ The stage-runner has rewritten `architecture.md` after every stage — the clean
 stage too, if one ran — so it already describes the code as built. What it cannot
 know is how the review ended. Edit it in place:
 
-- **Apply the final decision statuses** from `DECISIONS.md`. A `rejected` or
+- **Apply the final decision statuses** from this review. A `rejected` or
   `modified` decision is documented as it ended up after remediation, never as it
-  was first taken; drop anything the file still describes as provisional.
+  was first taken; drop anything the file still describes as provisional. You
+  already hold every status you changed; do not re-read the log for them.
 - **Mark it final.** Replace the header paragraph under the title with:
 
   ```markdown
@@ -246,10 +311,11 @@ verified on disk by someone who ran it, and re-reading the implementation to
 document it would make this step the token sink it exists to prevent. Build the
 file from exactly three inputs:
 
-- **`specs/<feature>/DECISIONS.md`** — the confirmed invariants, named constants,
-  and config keys, each with the `Change it here: file:line` that holds it. Use the
-  post-review status: a `rejected` or `modified` decision is documented as it ended
-  up after remediation, never as it was first taken.
+- **`specs/<feature>/DECISIONS.md`**, through the *Decision index* above and a
+  grep of each entry's `**Decision:**` line rather than a full read — the confirmed
+  invariants, named constants, and config keys, each with the file:line that holds
+  it. Use the post-review status: a `rejected` or `modified` decision is documented
+  as it ended up after remediation, never as it was first taken.
 - **The `Summary` and `Changes` sections of every `specs/<feature>/stages/*.report.md`**
   — what each stage landed, with exact names, exports, and types. These were
   written after verification passed, so they describe code that was observed to
@@ -324,7 +390,8 @@ feature, instead of re-reading its stage reports or searching its source.
 
 Close with:
 
-- how many decisions were confirmed, rejected, modified, and remediated, by tier;
+- how many decisions were confirmed, rejected, modified, and remediated, Minor and
+  Significant separately;
 - whether the scratchpad is gone;
 - the cleanup commit, if there was one;
 - that `specs/<feature>/architecture.md` was finalised (or written, for a feature
