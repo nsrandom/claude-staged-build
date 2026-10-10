@@ -61,9 +61,11 @@ Your job is to explain the numbers, not to regenerate them.
      together; the stage report separates them.
 
 4. **Say whether the feature has an `architecture.md`.** The report's
-   **Architectures** line lists every `specs/*/architecture.md` on disk. If this
-   feature is complete and has none, point the user at `/staged-build:cleanup`,
-   which writes it: without one, the next feature to touch this code pays for
+   **Architectures** line lists every `specs/*/architecture.md` on disk. The
+   stage-runner writes it after every passing stage, so a feature with `done`
+   stages and none predates the running file. If this feature is complete and has
+   none, point the user at `/staged-build:cleanup`, which writes it from scratch in
+   that case: without one, the next feature to touch this code pays for
    rediscovering it.
 
 5. **Name the one change worth making.** Not a list of everything that could be

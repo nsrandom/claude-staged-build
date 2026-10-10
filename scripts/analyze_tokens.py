@@ -213,12 +213,13 @@ def read_decisions(repo: str, feature: str) -> dict:
 
 
 def find_architectures(repo: str, feature: str) -> dict:
-    """Locate the permanent architecture references cleanup leaves behind.
+    """Locate the architecture references features keep under specs/.
 
-    A completed feature gets specs/<feature>/architecture.md: its entrypoints,
-    public API, invariants, and config keys in about a page. Downstream features
-    read that instead of re-deriving the same facts from source, so the report says
-    which ones exist and whether this feature has written its own yet.
+    Each feature has specs/<feature>/architecture.md: its entrypoints, public API,
+    invariants, and config keys in about a page, rewritten by the stage-runner
+    after every passing stage and finalised at cleanup. Later stages and
+    downstream features read that instead of re-deriving the same facts from
+    source, so the report says which ones exist and whether this feature has one.
     """
     paths = sorted(
         os.path.relpath(p, repo)
@@ -869,7 +870,10 @@ def print_summary(feature, result, invocations, out_md):
         % (", ".join(arch["completed_architectures"]) or "(none)")
     )
     if result["mode"] == "post-feature" and not arch["has_architecture"]:
-        print("    ! no architecture.md for this feature — run /staged-build:cleanup")
+        print(
+            "    ! no architecture.md for this feature — it predates the per-stage"
+            " file; run /staged-build:cleanup to write it"
+        )
     print("  findings: %d critical, %d warning" % (len(criticals), len(warnings)))
     for finding in criticals[:3]:
         print("    ! %s (%s): %s" % (finding["kind"], finding["role"], finding["detail"]))

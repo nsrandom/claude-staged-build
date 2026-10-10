@@ -40,8 +40,9 @@ paths. Never describe a structure you have not looked at. If the repo is empty, 
 so and name the stack you would use and why — as an explicit question, not an
 assumption.
 
-**Start with `specs/*/architecture.md`.** Any feature this pipeline has already
-completed leaves one: a compact, post-completion reference for its entrypoints,
+**Start with `specs/*/architecture.md`.** Every feature this pipeline builds keeps
+one, rewritten after each stage and finalised at cleanup: a compact reference for
+its entrypoints,
 public API and CLI surface, invariants, config keys, and test command. If your goal
 touches one of those features, read its architecture file before you go looking
 through its source — it is the cheapest accurate ground truth available, and it is

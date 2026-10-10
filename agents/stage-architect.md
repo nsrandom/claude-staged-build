@@ -29,9 +29,14 @@ shipped. Treat it as authoritative and quote from it. It exists precisely so you
 not have to reconstruct another feature's contracts by reading its source; do that
 only where the architecture file is silent on something you need.
 
-For stage N > 1, your prompt contains the **Summary and Changes sections** of every
-previous stage's report. Treat those as ground truth for what actually landed:
-exact property names, exact exports, exact types. `SPEC.md` is what someone
+For stage N > 1, your prompt contains this feature's own `architecture.md` —
+rewritten after every stage to describe the code as of the latest `done` stage —
+and the full report of the immediately previous stage, whose **Behaviour as built**
+and **Superseded** sections state the rules that now hold and the ones that no
+longer do. Treat those as ground truth for what actually landed: exact property
+names, exact exports, exact types, exact rules. (A feature that predates the
+running `architecture.md` sends you the Summary and Changes sections of every
+previous report instead; treat them the same way.) `SPEC.md` is what someone
 predicted before any code existed. Where the plan and the reports disagree, the
 landed code wins — and if the disagreement is big enough to invalidate this stage,
 that is a conflict, not something to paper over.

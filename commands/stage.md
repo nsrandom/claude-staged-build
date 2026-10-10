@@ -24,7 +24,7 @@ Requested: `$ARGUMENTS`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
 - Scratchpad contents: !`ls -1 specs/*/scratchpad 2>/dev/null || echo "(none)"`
-- Completed feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
+- Feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
 
 ### Plan state
 
@@ -88,7 +88,7 @@ Agent names are scoped to this plugin: `staged-build:plan-architect`,
 
 ```
 specs/<feature>/
-  architecture.md                 <- cleanup: the permanent system reference for the finished feature
+  architecture.md                 <- stage-runner: the code as of the latest done stage, updated every stage; cleanup finalises it
   SPEC.md                         <- plan-architect: goal, context, approach, stages, non-goals
   STATE.md                        <- plan-architect: the stage table and the branch binding
   DECISIONS.md                    <- decisions taken without asking, with tiers
@@ -104,12 +104,17 @@ specs/<feature>/
 Resolve `<feature>` from the listing above. If exactly one feature exists, use it.
 If several exist and the user did not name one, ask which. Never guess.
 
-## `architecture.md` is the ground truth for a finished feature
+## `architecture.md` is the ground truth for what has landed
 
-A feature that has been through `/staged-build:cleanup` has an
-`architecture.md`: entrypoints, module map, public API and CLI contracts,
-invariants, config keys, and the test command — synthesised after the code actually
-landed, in about a page.
+Every feature keeps an `architecture.md`: entrypoints, module map, public API and
+CLI contracts, invariants, config keys, and the test command — in about a page. The
+stage-runner rewrites it after every passing stage and commits it with that stage,
+so it always describes the code as of the latest `done` stage. `/staged-build:cleanup`
+finalises it.
+
+**Within this feature**, it replaces the pile of earlier reports: stage N > 1 gets
+this feature's `architecture.md` plus the full report of the immediately previous
+stage, and nothing older.
 
 **When this feature's work touches an already-completed one, read that file and
 pass it down verbatim** — to the stage-architect, and through the stage-runner to
@@ -254,14 +259,19 @@ Take **one** stage from pending to done. One. Never begin a second.
 
 5. **Specify the stage.** Delegate to `staged-build:stage-architect`, passing the
    full text of `SPEC.md`, the STATE.md row for this stage, and — for stage N > 1 —
-   the **Summary and Changes sections** of every previous
-   `specs/<feature>/stages/*.report.md`, with raw test logs stripped out.
+   the full text of `specs/<feature>/architecture.md` and the full text of the
+   **immediately previous** stage's `specs/<feature>/stages/*.report.md`. Do not
+   paste the Summary and Changes of every earlier report: `architecture.md` already
+   carries what they established, rewritten to match the code as it stands.
 
-   Those report sections are the ground truth for what actually landed: exact
-   names, exports, and types. `SPEC.md` is what someone predicted before any code
-   existed. Passing both is what stops stage 05 from being specified against an
-   interface that stage 03 never built. Keep it to a few hundred tokens — summaries
-   and change lists only, never whole reports.
+   Those two files are the ground truth for what actually landed: exact names,
+   exports, types, and the rules that hold. `SPEC.md` is what someone predicted
+   before any code existed. Passing both is what stops stage 05 from being
+   specified against an interface that stage 03 never built.
+
+   If a feature started before the running `architecture.md` existed has none yet,
+   pass the Summary and Changes sections of every previous report instead, as
+   before; the stage-runner creates the file when this stage passes.
 
    Where the stage integrates with an already-completed feature, add the full text
    of that feature's `specs/<other-feature>/architecture.md`.
@@ -294,12 +304,14 @@ Take **one** stage from pending to done. One. Never begin a second.
    - the full text of `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, and the routing
      config
    - the full text of the approved `NN-slug.md` and `NN-slug.detail.md`
-   - the prior stage reports' Summary and Changes sections
+   - for stage N > 1, the same two files the stage-architect got: the full
+     `architecture.md` and the full report of the immediately previous stage
    - the `architecture.md` of any completed feature this stage integrates with
 
    It records the stage base, runs `implementer` ↔ `verifier` with a budget of 2
-   fix cycles, appends decisions to `DECISIONS.md`, commits on `VERDICT: PASS`,
-   writes `NN-slug.report.md`, and returns at most 800 tokens.
+   fix cycles, appends decisions to `DECISIONS.md`, and on `VERDICT: PASS` writes
+   `NN-slug.report.md`, rewrites `architecture.md`, and commits both with the stage.
+   It returns at most 800 tokens.
 
    If the implementer hits its 25-turn budget it returns `STATUS: RELAY_REQUIRED`,
    and the runner hands the stage to a fresh implementer carrying only the contract
@@ -326,9 +338,9 @@ Take **one** stage from pending to done. One. Never begin a second.
 
 10. **When every row is `done`**, tell the user the feature is complete and point
     them at `/staged-build:cleanup` — which reviews the decisions taken along the
-    way, clears the scratchpad, and writes `specs/<feature>/architecture.md`, the
-    permanent reference later features and maintenance sessions read instead of
-    re-deriving this one from source — and at `/staged-build:analyze-tokens` for
+    way, clears the scratchpad, and finalises `specs/<feature>/architecture.md`,
+    the permanent reference later features and maintenance sessions read instead
+    of re-deriving this one from source — and at `/staged-build:analyze-tokens` for
     the efficiency report.
 
 ## `status`
@@ -342,8 +354,10 @@ Show the STATE.md table above, then:
 - a decision summary from `DECISIONS.md`: total, how many Tier 1 and Tier 2, and
   how many are unconfirmed, confirmed, rejected, deferred, or modified,
 - whether `specs/<feature>/scratchpad/` exists and what is in it,
-- whether `specs/<feature>/architecture.md` exists — and, if every row is `done`
-  and it does not, that `/staged-build:cleanup` is what writes it,
+- whether `specs/<feature>/architecture.md` exists and which stage last updated it
+  (the `Last updated:` line in its header) — and, if stages are `done` and it does
+  not exist, that the feature predates the running file: the next passing stage
+  creates it, or `/staged-build:cleanup` writes it once every row is `done`,
 - the summary section of the most recent `stages/*.report.md`.
 
 Change nothing.
@@ -359,6 +373,9 @@ Change nothing.
      `git reset --hard HEAD` if the stage was never committed, otherwise
      `git reset --hard <the commit before this stage's first commit>`. Name the
      exact ref you are about to reset to when you ask.
+
+     `architecture.md` is committed with each stage, so this reset (or
+     `jj abandon`) already reverts it to the previous stage's version.
 
      **Do not delete the branch and do not create a replacement.** The branch
      carries every earlier stage of the feature; deleting it throws away work that

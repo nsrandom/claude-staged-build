@@ -25,9 +25,13 @@ stage assumes.
 **If your prompt includes another feature's `architecture.md`, that file is
 authoritative for what that feature exposes** — its entrypoints, public API and CLI
 contracts, wire schemas, invariants, and config keys, each with the `file:line` that
-holds it. It was written at that feature's cleanup from evidence that had already
-been verified. Take import paths and signatures from it rather than going and
-reading its source; that rediscovery is exactly the cost the file exists to remove.
+holds it. It was written from evidence that had already been verified. Take import
+paths and signatures from it rather than going and reading its source; that
+rediscovery is exactly the cost the file exists to remove.
+
+**The same goes for this feature's own `architecture.md`**, which your prompt
+includes from stage 2 onward. It is rewritten after every passing stage and
+describes what the earlier stages of this feature actually built.
 Read the source only to settle a contradiction between the file and the code in
 front of you — and if you find one, say so in your report, because a stale
 `architecture.md` misleads every stage after this one.

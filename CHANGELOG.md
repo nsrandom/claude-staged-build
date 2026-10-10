@@ -5,6 +5,61 @@ All notable changes to this plugin are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-10-10
+
+Each stage now hands the next one better context: a richer report, and a running
+`architecture.md` that describes the code as of the latest `done` stage instead of
+being written only at cleanup.
+
+### Added
+
+- **`## Behaviour as built` and `## Superseded` in the stage report.** The first
+  records the rules that actually landed, as invariants — ordering, failure
+  handling, exit codes, defaults, what is rejected, edge-case outcomes — taken from
+  the contract and corrected to what the verifier confirmed. The second lists, one
+  line each, the earlier stage's rule or contract this stage deliberately changed,
+  or "none". About 300–500 tokens together. `## Summary` and `## Changes` are
+  unchanged, and so is the `stage-runner`'s 800-token return budget: the report
+  goes to disk, not up.
+
+### Changed
+
+- **`architecture.md` is updated after every stage.** On `VERDICT: PASS`, before
+  committing, the `stage-runner` rewrites `specs/<feature>/architecture.md` from
+  the previous version, this stage's report, `DECISIONS.md`, and
+  `SESSION_STATE.json` — not from source — and commits it with the stage. Same
+  six-section schema and 1,000–1,500 token target as before. Each update describes
+  the code as it stands; superseded rules are removed rather than annotated, and
+  the history stays in the reports. If an update would run over budget, prose is
+  cut, never contracts. The header now says the file is updated after every stage,
+  is authoritative as of the latest `done` stage, and names the stage that last
+  updated it.
+
+- **The stage handoff.** For stage N > 1, `next`, `yolo`, and cleanup's
+  remediation stage pass the `stage-architect` and `stage-runner` the full
+  `architecture.md` and the full report of the immediately previous stage, instead
+  of the Summary and Changes sections of every earlier report. The `stage-runner`
+  forwards `architecture.md` to the `implementer`; the `verifier` still receives
+  only the contract and the diff. `yolo`'s between-stage reload is updated to
+  match. A feature started before this change, with no `architecture.md` yet, falls
+  back to the old handoff until its next stage passes and creates the file.
+
+- **The `stage-runner` writes the report before committing**, so the report and
+  `architecture.md` land in the stage's commit. The report's `Commit:` line is
+  filled in afterwards and rides along with the next commit.
+
+- **`/staged-build:cleanup` finalises `architecture.md` rather than writing it.**
+  It applies the reviewed decision statuses and marks the header final. A feature
+  with no `architecture.md` still gets one written from scratch, as before.
+
+- **`status`** shows whether `architecture.md` exists and which stage last updated
+  it. **`redo`** notes that its reset (or `jj abandon`) already reverts the file,
+  since it is committed with each stage.
+
+- **`analyze_tokens.py`** wording: a feature with no `architecture.md` is described
+  as predating the per-stage file, with `/staged-build:cleanup` to write it.
+  Metrics are unchanged.
+
 ## [1.2.0] — 2026-10-05
 
 ### Changed

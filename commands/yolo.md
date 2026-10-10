@@ -23,7 +23,7 @@ Requested: `$ARGUMENTS`
 - Existing git branches: !`git branch --format='%(refname:short)' 2>/dev/null | tr '\n' ' ' || echo "(n/a)"`
 - Uncommitted code (excluding `specs/`): !`git status --porcelain -- ':!specs' 2>/dev/null || echo "(n/a)"`
 - Scratchpad gitignored: !`grep -q 'specs/\*\*/scratchpad/' .gitignore 2>/dev/null && echo yes || echo "no - add it"`
-- Completed feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
+- Feature architectures: !`ls -1 specs/*/architecture.md 2>/dev/null | tr '\n' ' ' || echo "(none)"`
 
 ### Plan state
 
@@ -90,7 +90,7 @@ Agent names are scoped to this plugin: `staged-build:plan-architect`,
 
 ```
 specs/<feature>/
-  architecture.md                 <- cleanup: the permanent system reference for the finished feature
+  architecture.md                 <- stage-runner: the code as of the latest done stage, updated every stage; cleanup finalises it
   SPEC.md                         <- plan-architect: goal, context, approach, stages, non-goals
   STATE.md                        <- plan-architect: the stage table and the branch binding
   DECISIONS.md                    <- every decision taken without asking, with tiers
@@ -102,6 +102,10 @@ specs/<feature>/
   stages/NN-slug.report.md        <- stage-runner: evidence and what actually landed
   stages/NN-slug.verification.log <- verifier: the raw command output, kept off every context
 ```
+
+This feature's own `architecture.md` is rewritten by the stage-runner after every
+passing stage and committed with it, so it always describes the code as of the
+latest `done` stage. For stage N > 1 it stands in for the earlier reports.
 
 Where a stage integrates with an already-completed feature, that feature's
 `specs/<other-feature>/architecture.md` is the compact ground truth for its
@@ -335,13 +339,13 @@ churn — has done its job. Nothing you need from it lives only in your context;
 every part of it that matters is on disk.
 
 **Reload lean.** At the start of each stage, rebuild what you need from exactly
-four things, read fresh:
+these, read fresh:
 
 - `specs/<feature>/SESSION_STATE.json`
 - `specs/<feature>/STATE.md`
 - `specs/<feature>/DECISIONS.md`
-- the **Summary and Changes** sections of the previous stages' `NN-slug.report.md`
-  — the sections themselves, not the whole reports
+- for stage N > 1, `specs/<feature>/architecture.md` and the full
+  `NN-slug.report.md` of the **immediately previous** stage — no earlier reports
 
 Plus the `architecture.md` of any completed feature this stage integrates with.
 That is the entire state of the run. If something you think you need is not in one
@@ -352,9 +356,9 @@ its `NN-slug.md` or `.detail.md`, any verifier findings, any implementer payload
 any command output. Re-read a stage file from disk on the rare occasion you need it
 again; do not scroll back for it.
 
-Read the four files fresh at each boundary rather than quoting your own earlier
-reading of them. They change as the run proceeds — `STATE.md` and `DECISIONS.md`
-change every stage — and a stale copy in your context is both wrong and expensive.
+Read these files fresh at each boundary rather than quoting your own earlier
+reading of them. They change as the run proceeds — `STATE.md`, `DECISIONS.md`, and
+`architecture.md` change every stage — and a stale copy in your context is both wrong and expensive.
 
 If the session has nonetheless grown long — many stages in, or a stage that needed
 relays and fix cycles — **say so and stop at a stage boundary**, telling the user
@@ -467,22 +471,24 @@ reset it — the user needs to see what actually happened.
       - the feature slug, stage number, title, and slug
       - the full text of `SPEC.md`, `STATE.md`, `SESSION_STATE.json`, and the
         routing config
-      - for stage N > 1, the **Summary and Changes sections** of every previous
-        `stages/*.report.md`, with raw test logs stripped — a few hundred tokens,
-        never whole reports
+      - for stage N > 1, the full text of `specs/<feature>/architecture.md` and the
+        full text of the **immediately previous** stage's `stages/*.report.md` —
+        not the Summary and Changes of every earlier report. If a feature started
+        before the running `architecture.md` existed has none yet, pass the
+        Summary and Changes sections of every previous report instead
       - the `architecture.md` of any completed feature this stage integrates with
       - the unattended addendum above, verbatim
 
       It specifies the stage, implements it, verifies it independently, self-heals
       within a budget of 2 fix cycles, relays a stuck implementer to a fresh one via
-      its WIP checkpoint (at most twice), appends decisions to `DECISIONS.md`,
-      commits on `VERDICT: PASS`, writes the report to disk, and returns at most
-      800 tokens.
+      its WIP checkpoint (at most twice), appends decisions to `DECISIONS.md`, and
+      on `VERDICT: PASS` writes the report, rewrites `architecture.md`, and commits
+      both with the stage. It returns at most 800 tokens.
 
    d. **On `STATUS: PASS`** → mark the row `done` in STATE.md, tick the todo, print
       one line (stage passed, its commit, decisions logged, next stage), **drop
       that stage's material as described above**, and **go straight into the next
-      stage** — re-reading the four state files rather than working from memory.
+      stage** — re-reading the state files rather than working from memory.
 
       **This is the one place `yolo` deliberately contradicts `next`: it
       auto-continues.** Do not stop between stages, do not ask whether to carry on,
@@ -499,10 +505,10 @@ reset it — the user needs to see what actually happened.
 
 3. **When no stage is pending**, the implementation is done but the run is not: the
    decisions taken along the way are still unconfirmed, the scratchpad may still be
-   there, and the feature has no `architecture.md` yet. Report the run (below), then
-   tell the user to run **`/staged-build:cleanup`**, which reviews the decisions,
-   clears the scratchpad, and writes `specs/<feature>/architecture.md` — the
-   permanent reference every later feature and maintenance session reads instead of
+   there, and the feature's `architecture.md` still documents unreviewed decisions.
+   Report the run (below), then tell the user to run **`/staged-build:cleanup`**,
+   which reviews the decisions, clears the scratchpad, and finalises
+   `specs/<feature>/architecture.md` — the permanent reference every later feature and maintenance session reads instead of
    re-deriving this one from source. It starts in a fresh, lean context; that reset
    is the point, and it is why cleanup is a separate command rather than the last
    step of this one.
@@ -542,4 +548,4 @@ uncommitted). Then stop. Do not offer to work around it.
 they are on, the decision count by tier, how many stages needed a relay or a fix
 cycle, anything the verifier flagged and was accepted as non-blocking, the fact
 that nothing was pushed, and the two follow-up commands — noting that
-`/staged-build:cleanup` is also what writes `specs/<feature>/architecture.md`.
+`/staged-build:cleanup` is also what finalises `specs/<feature>/architecture.md`.

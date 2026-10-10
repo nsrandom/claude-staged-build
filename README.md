@@ -29,8 +29,8 @@ to disk, and dies — handing back a summary of at most 800 tokens. Test
 transcripts, diffs, and fix cycles never reach your conversation. That is what lets
 a twenty-stage `yolo` run reach stage 20 instead of drowning in its own history. In
 `yolo` it goes further and resets between stages, reloading only `STATE.md`,
-`DECISIONS.md`, `SESSION_STATE.json`, and the previous report summaries, so a long
-run does not accumulate its own history quadratically.
+`DECISIONS.md`, `SESSION_STATE.json`, `architecture.md`, and the previous stage's
+report, so a long run does not accumulate its own history quadratically.
 
 **Subagents write evidence to disk, not into the chat.** Every role has a return
 budget — `implementer` and `stage-architect` ≤350 tokens, `verifier` ≤300,
@@ -53,19 +53,24 @@ unstuck. Two relays per stage; a third means the stage is wrong, not the agent.
 and *in what order*, and settles it with you. The stage-architect then works out
 *how*, one stage at a time — so a stage's spec is written after the stages before
 it have actually landed, informed by what the code really became rather than by
-what the plan predicted. For stage N > 1 it is given the Summary and Changes
-sections of every prior stage report as ground truth, which is what stops stage 05
-from being specified against an interface stage 03 never built.
+what the plan predicted. For stage N > 1 it is given the feature's current
+`architecture.md` and the full report of the stage just before it as ground truth,
+which is what stops stage 05 from being specified against an interface stage 03
+never built.
 
-**A finished feature leaves one page, not twenty.** At the end of
-`/staged-build:cleanup`, the feature gets `specs/<feature>/architecture.md`:
-entrypoints, module map, public API and CLI contracts, invariants, config keys with
-their `file:line`, and the test command. It is synthesised from `DECISIONS.md`, the
-stage reports' Summary and Changes sections, and `SESSION_STATE.json` — never by
-re-reading the source, which would make the documentation step the token sink it
-exists to prevent. Later features and maintenance sessions read that one file
-instead of grepping the tree: `SPEC.md` predates the code and has drifted, and the
-stage reports are the truth in fifteen fragments.
+**Each stage hands the next one page, not twenty.** Every stage report records,
+besides what changed, the **Behaviour as built** — the rules that actually landed,
+as invariants — and what it **Superseded**. On a pass, the stage-runner then
+rewrites `specs/<feature>/architecture.md` — entrypoints, module map, public API and
+CLI contracts, invariants, config keys with their `file:line`, and the test command
+— from the previous version, that report, `DECISIONS.md`, and
+`SESSION_STATE.json`, and commits it with the stage. Never by re-reading the source,
+which would make the documentation step the token sink it exists to prevent. So the
+next stage gets that one current page plus the previous report, rather than a
+fragment from every stage before it. `/staged-build:cleanup` finalises the file,
+and later features and maintenance sessions read it instead of grepping the tree:
+`SPEC.md` predates the code and has drifted, and the stage reports are the truth in
+fifteen fragments.
 
 **The verifier is given the contract and the diff, and nothing else** — never the
 implementation plan, the implementer's report, or the decision log. It re-derives
@@ -222,14 +227,16 @@ stage still starts its own change and bookmarks are left alone.
 ### `/staged-build:stage status`
 
 The stage table, the branch, the session state, a decision summary by tier and
-status, what's in the scratchpad, and the latest stage report. Changes nothing.
+status, what's in the scratchpad, whether `architecture.md` exists and which stage
+last updated it, and the latest stage report. Changes nothing.
 
 ### `/staged-build:stage redo`
 
 Resets the current stage to `pending`, discards its work, and runs `next` again.
 It asks before destroying anything, naming the exact ref it would reset to. It
 stays on the feature branch — the branch holds every earlier stage, so `redo`
-resets the current stage's work off it rather than deleting it.
+resets the current stage's work off it rather than deleting it. `architecture.md`
+is committed with each stage, so the reset rolls it back too.
 
 ### `/staged-build:yolo`
 
@@ -237,9 +244,9 @@ Runs **every** pending stage, back to back, committing as it goes. Each stage go
 to its own `stage-runner`, so the root orchestrator collects short summaries rather
 than twenty stages of build output — and it **resets between stages**, dropping the
 finished stage's material and reloading only `STATE.md`, `DECISIONS.md`,
-`SESSION_STATE.json`, and the previous report summaries. Everything it needs is on
-disk, so nothing is lost; what goes away is the per-turn cost of re-reading stage 3
-while running stage 12. If a run does grow long, it stops at a stage boundary and
+`SESSION_STATE.json`, `architecture.md`, and the previous stage's report.
+Everything it needs is on disk, so nothing is lost; what goes away is the per-turn
+cost of re-reading stage 3 while running stage 12. If a run does grow long, it stops at a stage boundary and
 tells you to `/clear` and run `/staged-build:yolo` again, which resumes from
 `STATE.md` with a clean slate.
 
@@ -326,9 +333,11 @@ Then:
   confirms the remediations landed, the scratchpad is gone, and the tests still
   pass.
 - **`architecture.md`, last.** Once the remediation has landed and the scratchpad
-  is gone, it writes `specs/<feature>/architecture.md` from the decision log, the
-  stage reports, and `SESSION_STATE.json`, and commits it. That is the file every
-  later feature and maintenance session should read first.
+  is gone, it finalises `specs/<feature>/architecture.md` — applying the reviewed
+  decision statuses and marking it final — and commits it. A feature that predates
+  the per-stage file gets one written from scratch from the decision log, the stage
+  reports, and `SESSION_STATE.json`. That is the file every later feature and
+  maintenance session should read first.
 
 ### `/staged-build:analyze-tokens`
 
@@ -374,7 +383,7 @@ Plan state lives in `specs/`, in your project, one directory per feature:
 
 ```
 specs/<feature>/
-  architecture.md                # written by cleanup: the permanent system reference
+  architecture.md                # updated every stage, finalised by cleanup: the system reference
   SPEC.md                        # goal, context, approach, stages, non-goals
   STATE.md                       # the stage table, and the feature's Branch: line
   DECISIONS.md                   # decisions taken without asking, with tiers
@@ -395,10 +404,11 @@ plan-architect up front. Everything under `stages/` is written when that stage
 begins — so a stage spec reflects the code as it actually exists by then, not as
 the plan predicted it would.
 
-**`architecture.md` is the cure for the exploration tax.** It is written once, at
-the end of `cleanup`, from metadata already verified on disk — the decision log,
-the stage reports' Summary and Changes sections, and `SESSION_STATE.json`. About a
-page: entrypoints, module map, public API and CLI contracts, invariants and data
+**`architecture.md` is the cure for the exploration tax.** The stage-runner
+rewrites it after every passing stage, from metadata already verified on disk — the
+previous version, that stage's report, the decision log, and `SESSION_STATE.json` —
+and `cleanup` finalises it. It always describes the code as of the latest `done`
+stage. About a page: entrypoints, module map, public API and CLI contracts, invariants and data
 flow, an exhaustive table of config keys and named constants with their `file:line`,
 and the test command. Point the next feature — or the next maintenance session — at
 that file instead of letting it rediscover the same facts across dozens of

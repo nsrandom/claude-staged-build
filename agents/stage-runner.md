@@ -57,8 +57,13 @@ The root orchestrator gives you:
 - The full text of `SPEC.md` and `STATE.md`
 - The pipeline routing config
 - The full text of `SESSION_STATE.json`
-- For stage N > 1: the **Summary and Changes sections** of every previous
-  `stages/*.report.md`, with raw test logs stripped
+- For stage N > 1: the full text of this feature's `specs/<feature>/architecture.md`
+  — the code as of the latest `done` stage — and the full text of the **immediately
+  previous** stage's `stages/*.report.md`. Earlier reports are not passed;
+  `architecture.md` already carries what they established. (A feature started
+  before the running `architecture.md` existed may have none yet; then you get the
+  Summary and Changes sections of every previous report instead, and you create the
+  file in step 7.)
 - Where this stage integrates with an already-completed feature: the full text of
   that feature's `specs/<other-feature>/architecture.md`. That file is the compact,
   post-completion ground truth for what the other feature actually exposes — pass
@@ -76,8 +81,10 @@ In `supervised` mode the specs are already written and the user has already
 approved them. Skip to step 2.
 
 In `unattended` mode, delegate to `staged-build:stage-architect`, passing verbatim:
-`SPEC.md`, the stage's row, the prior report summaries, the `architecture.md` of any
-completed feature this stage integrates with, and the autonomy addendum.
+`SPEC.md`, the stage's row, this feature's `architecture.md` and the previous
+stage's report (or the prior report summaries, if there is no `architecture.md`
+yet), the `architecture.md` of any completed feature this stage integrates with,
+and the autonomy addendum.
 It writes `specs/<feature>/stages/NN-slug.md` and `NN-slug.detail.md` to disk and
 returns a compact payload of at most 350 tokens, whose `DECISION_IDS` are
 references into the `## Autonomous decisions` section at the end of
@@ -107,8 +114,9 @@ In a jj repo, the change was already started by the root orchestrator; use
 ### 3. Implement
 
 Delegate to `staged-build:implementer` with the full verbatim text of both
-`NN-slug.md` and `NN-slug.detail.md`, the `architecture.md` of any completed feature
-this stage integrates with, the two paths it writes to —
+`NN-slug.md` and `NN-slug.detail.md`, this feature's `architecture.md` for stage
+N > 1, the `architecture.md` of any completed feature this stage integrates with,
+the two paths it writes to —
 `specs/<feature>/stages/NN-slug.report.md` for its evidence and
 `specs/<feature>/stages/NN-slug.wip.md` if it has to relay — and, in `unattended`
 mode, the autonomy addendum. Spell those paths out with the real feature slug and
@@ -184,7 +192,7 @@ line, the criteria checklist, its findings, and the verdict. Raw stdout does not
 travel through you, which is the same disk-first rule the implementer follows.
 
 **Never send it `NN-slug.detail.md`, `NN-slug.wip.md`, the implementer's report or
-payload, the decision log, or the autonomy addendum.** Do not tell it the code is believed to
+payload, the decision log, `architecture.md`, or the autonomy addendum.** Do not tell it the code is believed to
 work, that the implementer's own tests passed, or what was built. The verifier
 exists to re-derive whether the stage works from the diff and from running it. Hand
 it anyone's conclusions and it stops being a check. This is the single most
@@ -208,22 +216,10 @@ return `STATUS: HALTED` with every finding from every attempt. Never force a pas
 never extend the budget, and never argue the finding away yourself — you do not
 review code.
 
-### 6. Commit
+### 6. Finalise the report
 
-Only after `VERDICT: PASS`:
-
-```sh
-git add -A && git commit -m "<feature>-stage-NN: <title>"
-```
-
-Include the stage's `specs/` files, so the branch carries its own plan. Never
-`--amend`, never `--force`, never reset, never push, never branch or merge. In a jj
-repo, `jj describe -m "<feature>-stage-NN: <title>"`.
-
-### 7. Finalise the report
-
-Write `specs/<feature>/stages/NN-slug.report.md`. This is where the verbose
-material lives, so that it does not have to travel:
+Only after `VERDICT: PASS`. Write `specs/<feature>/stages/NN-slug.report.md`. This
+is where the verbose material lives, so that it does not have to travel:
 
 ```markdown
 # Stage NN report — <title>
@@ -236,6 +232,14 @@ material lives, so that it does not have to travel:
 
 ## Changes
 - path/to/file.ext — what changed
+
+## Behaviour as built
+- <a rule that actually landed, stated as an invariant: ordering, failure
+  handling, exit codes, defaults, what is rejected, edge-case outcomes>
+
+## Superseded
+- <stage NN: the earlier rule or contract this stage deliberately changed, one
+  line each — or "none">
 
 ## Acceptance criteria
 - [x] <criterion> — <the verifier's evidence>
@@ -259,6 +263,91 @@ The **Summary** and **Changes** sections are what later stages inherit as ground
 truth for what actually landed. Write them for a reader who has never seen this
 stage: exact names, exact exports, exact types. No raw test logs in those two
 sections.
+
+**Behaviour as built** takes the contract's design details and acceptance criteria
+and corrects them to what the verifier actually confirmed. Leave out anything that
+did not land. **Superseded** names, per line, the stage and the old rule this
+stage deliberately replaced. Keep the two together to about 300-500 tokens: they
+are evidence for the next stage, not a narrative.
+
+Leave `**Commit:**` as `pending` for now; you fill in the hash after step 8.
+
+### 7. Update `architecture.md`
+
+Still before committing, create or update `specs/<feature>/architecture.md`, so the
+next stage inherits one current page rather than a pile of reports. Build it from
+exactly four inputs:
+
+- the previous `architecture.md`, if there is one,
+- the report you just wrote, including **Behaviour as built** and **Superseded**,
+- `specs/<feature>/DECISIONS.md`,
+- `specs/<feature>/SESSION_STATE.json`.
+
+Do not re-read source files to write it. Read one only to settle a contradiction
+between those inputs, and say in the file that you did.
+
+**Rewrite, don't append.** Each update rewrites the file so it describes the code as
+it stands now. A superseded rule is removed, not annotated — the history lives in
+the reports. Decisions are documented as they currently stand in the code.
+
+Six sections, in this order, and **1,000 to 1,500 tokens in total.** It is a cheat
+sheet, not a manual: exhaustive about names, contracts, and constants, and terse
+about everything else. If an update would go over, cut prose, never contracts.
+
+```markdown
+# <feature> — architecture
+
+Updated after every stage from the previous architecture.md, the latest stage
+report, DECISIONS.md, and SESSION_STATE.json. Last updated: stage NN — <title>.
+This is the authoritative reference for the code as of the latest `done` stage.
+SPEC.md is what was predicted before it was built; the stage reports are the history.
+
+## 1. Executive summary and entrypoints
+<one paragraph: what this feature does, and the primary interfaces through which
+anything else reaches it — the module, the CLI command, the endpoint, the export>
+
+## 2. Module and directory map
+- path/to/module.ext — <one line: what this file is responsible for>
+
+## 3. Public API, CLI contracts, and JSON schemas
+- `functionName(arg: Type, ...) -> ReturnType` — <what it does; what it raises>
+- `cmd <sub> [--flag <value>]` — <what it does; exit codes>
+- `{ "field": "type" }` — <the shape, and where it is read or written>
+
+## 4. Key invariants and data flow
+- <the verified pipeline order, isolation boundary, or constraint — and what
+  breaks if it is violated>
+
+## 5. Configuration keys and defaults
+| Key | Default | Where it lives | Notes |
+|---|---|---|---|
+| `MAX_FETCH_ATTEMPTS` | `3` | `src/net/fetch.ts:12` | from D07 |
+
+## 6. Verification and test suite
+- Test command: `<the authoritative runner>`
+- Runtime: `<interpreter or toolchain>`
+- Key fixtures: `<paths>`
+```
+
+Section 5 is exhaustive: every environment variable, config parameter, and named
+constant that a decision landed as "one named place to change", with its
+`file:line`.
+
+### 8. Commit
+
+Only after `VERDICT: PASS`, and after steps 6 and 7:
+
+```sh
+git add -A && git commit -m "<feature>-stage-NN: <title>"
+```
+
+Include the stage's `specs/` files — the report and `architecture.md` among them —
+so the branch carries its own plan. Never `--amend`, never `--force`, never reset,
+never push, never branch or merge. In a jj repo,
+`jj describe -m "<feature>-stage-NN: <title>"`.
+
+Then write the hash onto the report's `**Commit:**` line. That one-line edit stays
+uncommitted under `specs/` and rides along with the next commit.
 
 ## Return payload
 

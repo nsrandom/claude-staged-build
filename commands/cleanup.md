@@ -1,5 +1,5 @@
 ---
-description: Review the decisions taken without asking, run a cleanup stage for whatever you reject and to clear the scratchpad, then write the feature's permanent architecture reference.
+description: Review the decisions taken without asking, run a cleanup stage for whatever you reject and to clear the scratchpad, then finalise the feature's permanent architecture reference.
 argument-hint: (nothing - use the only feature) | --feature <name>
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, TodoWrite, AskUserQuestion
 model: opus
@@ -37,7 +37,7 @@ user whether they agree with a decision.
 
 !`cat specs/*/DECISIONS.md 2>/dev/null || echo "(none yet)"`
 
-### Completed feature architectures
+### Feature architectures
 
 !`ls -1 specs/*/architecture.md 2>/dev/null || echo "(none)"`
 
@@ -65,8 +65,8 @@ through `staged-build:stage-runner` like every other stage.
 
 If `DECISIONS.md` has no `unconfirmed` entries and there is no `scratchpad/`
 directory, say so — there is nothing to review and nothing to remove. Skip to
-section 6 rather than stopping: the feature still needs its architecture reference
-if it does not have one yet.
+section 6 rather than stopping: the feature's architecture reference still needs
+finalising, or writing if it does not have one yet.
 
 ---
 
@@ -167,9 +167,12 @@ and go to section 6.
    never `main`/`master`. In a jj repo, `jj new -m "<feature>-stage-NN: cleanup"`.
 
 4. **Specify it.** Delegate to `staged-build:stage-architect` with the full text of
-   `SPEC.md` (including the section you just wrote), the new STATE.md row, and the
-   Summary and Changes sections of the previous stage reports. It writes
-   `NN-cleanup.md` and `NN-cleanup.detail.md`.
+   `SPEC.md` (including the section you just wrote), the new STATE.md row, the full
+   text of `specs/<feature>/architecture.md`, and the full report of the
+   immediately previous stage — exactly the handoff `/staged-build:stage next`
+   uses. If the feature has no `architecture.md`, pass the Summary and Changes
+   sections of the previous stage reports instead. It writes `NN-cleanup.md` and
+   `NN-cleanup.detail.md`.
 
 5. **Show the user the cleanup plan** — the acceptance criteria, the verification
    command, and the files it will touch — and get their go-ahead, exactly as
@@ -178,7 +181,9 @@ and go to section 6.
 
 6. **Run it.** Delegate to `staged-build:stage-runner` with `MODE: supervised`, the
    approved `NN-cleanup.md` and `NN-cleanup.detail.md`, `SPEC.md`, `STATE.md`,
-   `SESSION_STATE.json`, the routing config, and the prior report summaries.
+   `SESSION_STATE.json`, the routing config, and the same `architecture.md` and
+   previous report (or prior report summaries) the stage-architect got. On
+   `VERDICT: PASS` it rewrites `architecture.md` as it does for every stage.
 
    The verifier will confirm the remediations landed, that
    `specs/<feature>/scratchpad/` is gone, and that the test suite still passes.
@@ -192,10 +197,10 @@ and go to section 6.
    On `HALTED` or `REPLANNED`, stop and report it exactly as the other commands do:
    which step, the blocker in the subagent's own words, and the state of the tree.
 
-# 6. Write the feature's architecture reference
+# 6. Finalise the feature's architecture reference
 
 The feature is now finished, and this is the last thing it owes anyone: a single
-permanent reference to what actually landed. **Write
+permanent reference to what actually landed. **Finalise
 `specs/<feature>/architecture.md`** before you report.
 
 It is the answer to a real cost. `SPEC.md` was written before a line of code
@@ -205,7 +210,36 @@ this feature — a downstream feature integrating with it, or a maintenance task
 weeks from now — has nowhere to look, and pays for that by reading dozens of source
 files to rediscover what a page would have told it.
 
-## Synthesise it, do not re-derive it
+## If it exists: refresh it
+
+The stage-runner has rewritten `architecture.md` after every stage — the cleanup
+stage too, if one ran — so it already describes the code as built. What it cannot
+know is how the review ended. Edit it in place:
+
+- **Apply the final decision statuses** from `DECISIONS.md`. A `rejected` or
+  `modified` decision is documented as it ended up after remediation, never as it
+  was first taken; drop anything the file still describes as provisional.
+- **Mark it final.** Replace the header paragraph under the title with:
+
+  ```markdown
+  Final — refreshed at cleanup after stage NN, once every stage was done and every
+  decision reviewed. Until then it was updated after every stage.
+  This is the authoritative reference for what this feature is. SPEC.md is what was
+  predicted before it was built; the stage reports are the history.
+  ```
+
+Do not re-read source files and do not re-synthesise it from the reports — it is
+already current, and rebuilding it would make this step the token sink it exists to
+prevent. Keep it within the 1,000 to 1,500 token budget below. Read a source file
+only to settle a contradiction between the file and `DECISIONS.md`, and say in the
+file that you did.
+
+## If there is none: write it from scratch
+
+A feature started before the stage-runner kept a running `architecture.md` reaches
+cleanup without one. Write it now.
+
+### Synthesise it, do not re-derive it
 
 **Do not go and read the source files.** Everything you need has already been
 verified on disk by someone who ran it, and re-reading the implementation to
@@ -228,14 +262,16 @@ the file that you did.
 
 ## The schema
 
-Six sections, in this order, and **1,000 to 1,500 tokens in total.** It is a cheat
-sheet, not a manual: exhaustive about names, contracts, and constants, and terse
-about everything else. If it does not fit, cut prose, never contracts.
+The same schema the stage-runner uses for its per-stage updates. Six sections, in
+this order, and **1,000 to 1,500 tokens in total.** It is a cheat sheet, not a
+manual: exhaustive about names, contracts, and constants, and terse about
+everything else. If it does not fit, cut prose, never contracts.
 
 ```markdown
 # <feature> — architecture
 
-Generated at cleanup from DECISIONS.md, the stage reports, and SESSION_STATE.json.
+Final — generated at cleanup from DECISIONS.md, the stage reports, and
+SESSION_STATE.json.
 This is the authoritative reference for what this feature is. SPEC.md is what was
 predicted before it was built.
 
@@ -275,8 +311,8 @@ it is what a future agent would otherwise grep the whole tree for.
 
 `git add specs/<feature>/architecture.md` and commit with the usual
 `<feature>-stage-NN: ` prefix — or fold it into the cleanup stage's commit if you
-have not committed yet. If one already exists from an earlier cleanup run, rewrite
-it from the current inputs rather than appending to it.
+have not committed yet. Running cleanup again later takes the refresh path above;
+never append to the file.
 
 Tell the user, in one line, that future features and maintenance sessions should
 read `specs/<feature>/architecture.md` as the authoritative source for this
@@ -291,7 +327,8 @@ Close with:
 - how many decisions were confirmed, rejected, modified, and remediated, by tier;
 - whether the scratchpad is gone;
 - the cleanup commit, if there was one;
-- that `specs/<feature>/architecture.md` was written, linked, and what it is for;
+- that `specs/<feature>/architecture.md` was finalised (or written, for a feature
+  that had none), linked, and what it is for;
 - *"Feature complete. To inspect token consumption, latency, and subagent
   efficiency, run `/staged-build:analyze-tokens`."*
 
